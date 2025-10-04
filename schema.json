@@ -1,0 +1,12 @@
+{
+    "type": "object",
+    "properties": {
+        "captcha": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{4}$",
+            "description": "The 4-character captcha text (case-sensitive, alphanumeric)."
+        }
+    },
+    "required": ["captcha"],
+    "additionalProperties": false
+}

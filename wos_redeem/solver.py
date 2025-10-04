@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Optional
+
+import requests
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "qwen/qwen2.5-vl-72b-instruct:free")
+CAPTCHA_REGEX = re.compile(r"^[A-Za-z0-9]{4}$")
+
+
+def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int = 2) -> str:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    system_prompt = (
+        "You are a vision assistant that reads short CAPTCHA images.\n"
+        "Rules:\n"
+        " - The CAPTCHA is exactly 4 case-sensitive alphanumeric characters [A-Za-z0-9].\n"
+        " - Do not include spaces or quotes.\n"
+        " - Respond ONLY with a compact JSON object of the form: {\"captcha\":\"AB12\"}.\n"
+        " - If uncertain, return your best guess in the same JSON format."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Extract the 4-character CAPTCHA from this image."},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
+
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": messages,
+        "max_tokens": 20,
+    }
+
+    last_err = None
+    for _ in range(max_attempts):
+        try:
+            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            last_err = f"OpenRouter HTTP error: {e}"
+            continue
+
+        try:
+            content = data["choices"][0]["message"]["content"]
+            content_clean = content.strip()
+            if content_clean.startswith("```"):
+                m = re.search(r"\{.*\}", content_clean, flags=re.DOTALL)
+                if m:
+                    content_clean = m.group(0)
+
+            captcha = None
+            try:
+                obj = json.loads(content_clean)
+                if isinstance(obj, dict) and "captcha" in obj:
+                    captcha = str(obj["captcha"]).strip()
+            except json.JSONDecodeError:
+                m = re.search(CAPTCHA_REGEX, content_clean)
+                if m:
+                    captcha = m.group(0)
+
+            if not captcha or not CAPTCHA_REGEX.fullmatch(captcha):
+                last_err = f"Invalid captcha format from model: {content_clean[:200]!r}"
+                continue
+            return captcha
+        except Exception as e:
+            last_err = f"OpenRouter parse error: {e}"
+            continue
+
+    raise RuntimeError(last_err or "OpenRouter failed to produce a valid captcha")
+

@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+# Virtual environments & env files
+.venv/
+.env
+.env.*
+.python-version
+
+# Editors/IDE
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+
+# Project artifacts
+captcha.jpg
+captcha.png
+captcha.*.jpg
+failures/
+.worker_status
+wos.db
+*.db
+*.sqlite*
+wos_code_redeem.egg-info/
+*.egg-info/
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+*.log
+.history/
+.crush/
+.ipynb_checkpoints/
+
+# AI/assistant tooling artifacts
+.claude/
+.claude.json
+.claude.json.backup
+
+# Node (if frontend is used)
+frontend/node_modules/

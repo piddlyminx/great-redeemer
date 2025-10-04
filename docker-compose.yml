@@ -1,0 +1,87 @@
+services:
+  db:
+    image: postgres:16
+    container_name: wos_db
+    environment:
+      POSTGRES_DB: wos
+      POSTGRES_USER: wos
+      POSTGRES_PASSWORD: wos
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wos -d wos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: wos_app
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.local
+    environment:
+      # Use Postgres in compose
+      DATABASE_URL: postgresql+psycopg://wos:wos@db:5432/wos
+      # Optional: provide secrets via environment or docker secrets
+      WOS_SECRET: ${WOS_SECRET:-tB87#kPtkxqOS2}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      START_WORKERS: "0"  # workers run in separate service
+      BASE_PATH: /
+      # Toggle to require auth for read-only pages as well
+      REQUIRE_AUTH_FOR_READ: ${REQUIRE_AUTH_FOR_READ:-0}
+      # Worker throttling: attempts per poll cycle and delay between attempts
+      REDEEM_MAX_ATTEMPTS_PER_CYCLE: ${REDEEM_MAX_ATTEMPTS_PER_CYCLE:-1}
+      REDEEM_DELAY_S: ${REDEEM_DELAY_S:-5}
+      # Optional SSO providers
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+    networks:
+      - internal
+      - traefik
+    ports:
+      - "${APP_PORT:-3380}:8000" # override APP_PORT for local testing
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wos.rule=Host(`wos.ratme.org`) && PathPrefix(`/great-redeemer`)"
+      - "traefik.http.routers.wos.entrypoints=websecure"
+      - "traefik.http.routers.wos.tls=true"
+      - "traefik.http.services.wos.loadbalancer.server.port=8000"
+      # Ensure requests to /great-redeemer (no trailing slash) are redirected to /great-redeemer/
+      - "traefik.http.middlewares.wos-addslash.redirectregex.regex=^https?://([^/]+)/great-redeemer$"
+      - "traefik.http.middlewares.wos-addslash.redirectregex.replacement=https://$1/great-redeemer/"
+      - "traefik.http.middlewares.wos-addslash.redirectregex.permanent=true"
+      # Forward the prefix to FastAPI so url_for includes it, then strip it for upstream
+      - "traefik.http.middlewares.wos-prefix.headers.customrequestheaders.X-Forwarded-Prefix=/great-redeemer"
+      - "traefik.http.middlewares.wos-stripprefix.stripprefix.prefixes=/great-redeemer"
+      - "traefik.http.routers.wos.middlewares=wos-addslash,wos-prefix,wos-stripprefix"
+
+  worker:
+    build: .
+    container_name: wos_worker
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-lc", "uv run alembic upgrade head && uv run --frozen python -m wos_redeem.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://wos:wos@db:5432/wos
+      WOS_SECRET: ${WOS_SECRET:-tB87#kPtkxqOS2}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      REDEEM_MAX_ATTEMPTS_PER_CYCLE: ${REDEEM_MAX_ATTEMPTS_PER_CYCLE:-1}
+      REDEEM_DELAY_S: ${REDEEM_DELAY_S:-5}
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+  traefik:
+    external: true
