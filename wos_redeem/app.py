@@ -56,7 +56,9 @@ class XForwardedPrefixMiddleware:
         if scope.get("type") in {"http", "websocket"}:
             headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
             prefix = headers.get("x-forwarded-prefix")
-            if prefix:
+            # Avoid interfering with StaticFiles resolution: do not set root_path for asset requests.
+            path = scope.get("path") or ""
+            if prefix and not (path.startswith("/assets/") or path == "/assets"):
                 scope = dict(scope)
                 scope["root_path"] = prefix.rstrip("/") or "/"
         await self.app(scope, receive, send)
