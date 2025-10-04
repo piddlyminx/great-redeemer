@@ -37,6 +37,8 @@ services:
       # Worker throttling: attempts per poll cycle and delay between attempts
       REDEEM_MAX_ATTEMPTS_PER_CYCLE: ${REDEEM_MAX_ATTEMPTS_PER_CYCLE:-1}
       REDEEM_DELAY_S: ${REDEEM_DELAY_S:-5}
+      # Share heartbeat/status files with worker via /state volume
+      STATUS_DIR: /state
       # Optional SSO providers
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -47,6 +49,8 @@ services:
       - traefik
     ports:
       - "${APP_PORT:-3380}:8000" # override APP_PORT for local testing
+    volumes:
+      - state:/state
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wos.rule=Host(`wos.ratme.org`) && PathPrefix(`/great-redeemer`)"
@@ -75,11 +79,15 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       REDEEM_MAX_ATTEMPTS_PER_CYCLE: ${REDEEM_MAX_ATTEMPTS_PER_CYCLE:-1}
       REDEEM_DELAY_S: ${REDEEM_DELAY_S:-5}
+      STATUS_DIR: /state
     networks:
       - internal
+    volumes:
+      - state:/state
 
 volumes:
   pgdata:
+  state:
 
 networks:
   internal:

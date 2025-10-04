@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+import os
 from typing import Optional
 
 from fastapi import FastAPI, Request, Depends, Form, HTTPException, status, Response
@@ -40,6 +41,7 @@ def _normalize_base_path(p: str) -> str:
     return p.rstrip("/")
 
 BASE_PATH = _normalize_base_path(os.getenv("BASE_PATH", ""))
+STATUS_DIR = os.getenv("STATUS_DIR", "")
 
 app = FastAPI(title="WOS Redeemer Admin", root_path=BASE_PATH)
 
@@ -206,7 +208,9 @@ def api_summary(db: Session = Depends(get_db)):
     pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
     def read_file(p):
         try:
-            with open(p) as f:
+            base = STATUS_DIR or "."
+            full = os.path.join(base, p)
+            with open(full) as f:
                 return f.read().strip()
         except Exception:
             return None
@@ -214,7 +218,8 @@ def api_summary(db: Session = Depends(get_db)):
     worker_hb = read_file(".worker_heartbeat")
     try:
         import json
-        with open(".worker_status") as f:
+        base = STATUS_DIR or "."
+        with open(os.path.join(base, ".worker_status")) as f:
             worker_status = json.loads(f.read())
     except Exception:
         worker_status = None

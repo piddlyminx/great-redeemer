@@ -28,6 +28,15 @@ ATTEMPT_DELAY_S = float(os.getenv("REDEEM_DELAY_S", "2"))
 MIN_RETRY_MINUTES = int(os.getenv("REDEEM_MIN_RETRY_MINUTES", "15"))
 REDEEM_POLL_SECONDS = int(os.getenv("REDEEM_POLL_SECONDS", "20"))
 
+# Where to write small heartbeat/status files so the API can read them.
+# Defaults to current working directory; set to a shared volume path like "/state" in compose.
+STATUS_DIR = os.getenv("STATUS_DIR", "")
+
+
+def _status_path(name: str) -> str:
+    base = STATUS_DIR or "."
+    return os.path.join(base, name)
+
 
 def extract_codes(text: str) -> list[str]:
     # Simple heuristic: uppercase letters/digits 6-16 length, plus common WOS patterns
@@ -57,7 +66,7 @@ def rss_scraper_loop(interval_seconds: int = 300) -> None:
         except Exception:
             pass
         # Basic heartbeat marker (could be improved to DB status table)
-        with open(".rss_heartbeat", "w") as f:
+        with open(_status_path(".rss_heartbeat"), "w") as f:
             f.write(started.isoformat())
         time.sleep(interval_seconds)
 
@@ -67,9 +76,29 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
         poll_seconds = REDEEM_POLL_SECONDS
     api_key = None
     while True:
+        attempts_made = 0
+        successes = 0
+        errors = 0
         try:
             api_key = api_key or (os.getenv(openrouter_api_key_env) or None)  # type: ignore[name-defined]
             if not api_key:
+                # Still emit heartbeats/status so UI shows liveness without API key
+                try:
+                    with open(_status_path(".worker_heartbeat"), "w") as f:
+                        f.write(datetime.utcnow().isoformat())
+                    status = {
+                        "ts": datetime.utcnow().isoformat(),
+                        "attempts": attempts_made,
+                        "successes": successes,
+                        "errors": errors,
+                        "sleep": poll_seconds,
+                        "note": "no_openrouter_api_key",
+                    }
+                    with open(_status_path(".worker_status"), "w") as f:
+                        f.write(json.dumps(status))
+                except Exception:
+                    pass
+                print(f"[worker] OpenRouter API key missing; sleeping {poll_seconds}s", flush=True)
                 time.sleep(poll_seconds)
                 continue
             with SessionLocal() as db:
@@ -250,7 +279,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
             pass
 
         # heartbeat file
-        with open(".worker_heartbeat", "w") as f:
+        with open(_status_path(".worker_heartbeat"), "w") as f:
             f.write(datetime.utcnow().isoformat())
 
         # Write compact status for UI
@@ -262,7 +291,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                 "errors": errors,
                 "sleep": poll_seconds,
             }
-            with open(".worker_status", "w") as f:
+            with open(_status_path(".worker_status"), "w") as f:
                 f.write(json.dumps(status))
         except Exception:
             pass
