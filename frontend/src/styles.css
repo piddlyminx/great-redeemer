@@ -6,3 +6,6 @@ html, body, #root { height: 100%; }
 
 /* Smooth default transitions for theme surfaces */
 * { @apply transition-colors duration-200; }
+
+/* Ensure inner containers are pixel-perfect centered in navbar and main */
+.container-balanced { margin-left: auto; margin-right: auto; padding-left: 1rem; padding-right: 1rem; max-width: 56rem; /* ~max-w-4xl */ }
