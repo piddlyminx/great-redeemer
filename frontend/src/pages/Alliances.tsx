@@ -26,7 +26,7 @@ export default function Alliances() {
         <div className="font-semibold pl-3 border-l-2 border-violet-400/60">Create Alliance</div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <input className="input input-bordered" placeholder="Name" value={form.name} onChange={e=>setForm({...form, name:e.target.value})}/>
-          <input className="input input-bordered" placeholder="TAG" value={form.tag} onChange={e=>setForm({...form, tag:e.target.value.toUpperCase()})}/>
+          <input className="input input-bordered" placeholder="TAG" value={form.tag} onChange={e=>setForm({...form, tag:e.target.value})}/>
           <input className="input input-bordered" placeholder="Quota" type="number" value={form.quota} onChange={e=>setForm({...form, quota:Number(e.target.value)})}/>
           <button className="btn btn-primary" onClick={async()=>{await fetch(`${API_BASE}/alliances`,{method:'POST',body:new URLSearchParams({name:form.name, tag:form.tag, quota:String(form.quota)})}); setForm({name:'',tag:'',quota:0}); load()}}>Create</button>
         </div>

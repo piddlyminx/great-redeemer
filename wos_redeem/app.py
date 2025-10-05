@@ -264,7 +264,8 @@ def api_create_alliance(name: str = Form(...), tag: str = Form(...), quota: int 
     if not DISABLE_AUTH_ALL:
         # simple check: placeholder for future auth
         _require(True)
-    a = Alliance(name=name.strip(), tag=tag.strip().upper(), quota=max(0, int(quota)))
+    # Preserve user-provided case for the 3-letter alliance tag
+    a = Alliance(name=name.strip(), tag=tag.strip(), quota=max(0, int(quota)))
     db.add(a)
     db.commit()
     return {"ok": True, "id": a.id}
