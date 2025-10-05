@@ -4,14 +4,16 @@ import { API_BASE } from '../lib/base'
 export default function Dashboard() {
   const [data, setData] = useState<any>(null)
   const [alliances, setAlliances] = useState<any[]>([])
-  const [fid, setFid] = useState('')
   const [name, setName] = useState('')
+  const [fid, setFid] = useState('')
   const [alliance, setAlliance] = useState<number|''>('')
   const [peek, setPeek] = useState<any>(null)
+  const [codes, setCodes] = useState<any[]>([])
 
   useEffect(() => {
     fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => setData(null))
     fetch(`${API_BASE}/alliances`).then(r=>r.json()).then(setAlliances).catch(()=>setAlliances([]))
+    fetch(`${API_BASE}/codes`).then(r=>r.json()).then(setCodes).catch(()=>setCodes([]))
     let es: EventSource | null = null
     let id: any
     try {
@@ -34,14 +36,18 @@ export default function Dashboard() {
     return () => { if (id) clearInterval(id); if (es) es.close() }
   }, [])
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-      {/* Signup */}
-      <div className="md:col-span-4 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Left: Primary signup CTA */}
+      <div className="md:col-span-1 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
         <div className="card-body pt-4 md:pt-5">
-          <div className="text-base md:text-lg font-medium text-base-content/80 text-center md:text-left mb-3">Sign up for automatic rewards</div>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-2 md:gap-3">
-            <input className="input input-bordered" placeholder="User ID (FID)" value={fid} onChange={e=>setFid(e.target.value)} />
+          <div className="text-base md:text-lg font-medium text-base-content/80 mb-2 text-center md:text-left">Automatic gift code redemption</div>
+          <p className="text-sm text-base-content/70 mb-3">
+            Sign up with your in‑game name, player ID (FID), and alliance.
+            Whenever new gift codes are available, we’ll redeem them for you and the rewards will arrive in your in‑game mailbox to collect.
+          </p>
+          <div className="grid grid-cols-1 gap-2 md:gap-3">
             <input className="input input-bordered" placeholder="Username" value={name} onChange={e=>setName(e.target.value)} />
+            <input className="input input-bordered" placeholder="User ID (FID)" value={fid} onChange={e=>setFid(e.target.value)} />
             <select className="select select-bordered" value={alliance} onChange={e=>setAlliance(e.target.value ? Number(e.target.value) : '')}>
               <option value="">Alliance</option>
               {alliances.map(a=> <option key={a.id} value={a.id}>{a.name} ({a.tag})</option>)}
@@ -54,44 +60,45 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-      {/* top-level metric cards moved next to activity carousel */}
-      {data?.worker_status ? (
-        <div className="md:col-span-4 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
+
+      {/* Right: three vertically stacked boxes */}
+      <div className="md:col-span-2 grid grid-cols-1 gap-4">
+        {/* Box 1: Active codes */}
+        <div className="card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
           <div className="card-body">
-            <div className="text-sm text-base-content/60">Worker</div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-              <Stat label="Attempts" value={data.worker_status.attempts ?? '—'} />
-              <Stat label="Successes" value={data.worker_status.successes ?? '—'} />
-              <Stat label="Errors" value={data.worker_status.errors ?? '—'} />
-              <Stat label="Sleep (s)" value={data.worker_status.sleep ?? '—'} />
-            </div>
-            <div className="text-xs text-base-content/60 text-center md:text-left">
-              Last update: {formatAgo(data.worker_status.ts)}
-            </div>
-            {/* Activity + overview metrics: 2-col on desktop, stacked on mobile */}
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-              <ActivityCarousel peek={peek} />
-              <div>
-                <div className="text-xs text-base-content/60 mb-2 text-center md:text-left">Overview</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <MiniStat label="Users" value={data?.users ?? '—'} accent="violet" />
-                  <MiniStat label="Gift Codes" value={data?.codes ?? '—'} accent="sky" />
-                  <MiniStat label="Redeemed" value={data?.success ?? '—'} accent="emerald" />
-                  <MiniStat label="Pending" value={data?.pending ?? '—'} accent="amber" />
-                </div>
-              </div>
+            <div className="text-sm text-base-content/60 mb-2">Active codes</div>
+            <div className="flex flex-wrap gap-2">
+              {(codes.filter((c:any)=>c.active).slice(0,10)).map((c:any)=> (
+                <span key={c.id} className="badge badge-outline">{c.code}</span>
+              ))}
+              {(!codes || codes.filter((c:any)=>c.active).length===0) && <span className="text-sm text-base-content/50">No active codes yet.</span>}
             </div>
           </div>
         </div>
-      ) : (
-        <div className="md:col-span-4 card bg-base-100/60 shadow border border-white/10">
-          <div className="card-body py-3">
-            <div className="text-sm text-base-content/70">Worker</div>
-            <div className="text-sm text-base-content/50">No status yet. Start workers in compose (service "worker") or set START_WORKERS=1.</div>
+
+        {/* Box 2: Activity carousel */}
+        <div className="card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
+          <div className="card-body">
+            <ActivityCarousel peek={peek} />
           </div>
         </div>
-      )}
-      <div className="md:col-span-4 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
+
+        {/* Box 3: Overview metrics */}
+        <div className="card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
+          <div className="card-body">
+            <div className="text-sm text-base-content/60 mb-2">Overview</div>
+            <div className="grid grid-cols-2 gap-3">
+              <MiniStat label="Users" value={data?.users ?? '—'} accent="violet" />
+              <MiniStat label="Gift Codes" value={data?.codes ?? '—'} accent="sky" />
+              <MiniStat label="Redeemed" value={data?.success ?? '—'} accent="emerald" />
+              <MiniStat label="Pending" value={data?.pending ?? '—'} accent="amber" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Heartbeats footer card */}
+      <div className="md:col-span-3 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
         <div className="card-body">
           <div className="text-sm text-base-content/60">Heartbeats</div>
           <div className="grid grid-cols-2 gap-3 divide-x divide-white/5">

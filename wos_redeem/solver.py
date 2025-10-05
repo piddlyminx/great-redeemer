@@ -12,6 +12,18 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "qwen/qwen2.5-vl-72b-instruct:f
 CAPTCHA_REGEX = re.compile(r"^[A-Za-z0-9]{4}$")
 
 
+class CaptchaSolverError(Exception):
+    """Raised when the model returned an invalid/absent captcha string.
+
+    Carries the best-available guess and raw content for logging/filenames.
+    """
+
+    def __init__(self, message: str, guess: Optional[str] = None, content: Optional[str] = None):
+        super().__init__(message)
+        self.guess = guess
+        self.content = content
+
+
 def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int = 2) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -44,7 +56,9 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
         "max_tokens": 20,
     }
 
-    last_err = None
+    last_err: Optional[str] = None
+    last_guess: Optional[str] = None
+    last_content: Optional[str] = None
     for _ in range(max_attempts):
         try:
             resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
@@ -67,10 +81,14 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
                 obj = json.loads(content_clean)
                 if isinstance(obj, dict) and "captcha" in obj:
                     captcha = str(obj["captcha"]).strip()
+                    last_guess = captcha
             except json.JSONDecodeError:
+                # Fallback: extract 4-char alnum anywhere in the string
                 m = re.search(CAPTCHA_REGEX, content_clean)
                 if m:
                     captcha = m.group(0)
+                    last_guess = captcha
+            last_content = content_clean
 
             if not captcha or not CAPTCHA_REGEX.fullmatch(captcha):
                 last_err = f"Invalid captcha format from model: {content_clean[:200]!r}"
@@ -80,5 +98,5 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
             last_err = f"OpenRouter parse error: {e}"
             continue
 
-    raise RuntimeError(last_err or "OpenRouter failed to produce a valid captcha")
-
+    # Exhausted attempts without a valid captcha
+    raise CaptchaSolverError(last_err or "OpenRouter failed to produce a valid captcha", guess=last_guess, content=last_content)

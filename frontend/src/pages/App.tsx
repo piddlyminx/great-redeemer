@@ -13,7 +13,7 @@ export default function App() {
         <div className="container-balanced w-full">
           <div className="flex w-full flex-col md:flex-row md:items-center md:justify-between gap-2 py-2">
             <div className="font-semibold tracking-wide text-xl md:text-lg text-center md:text-left">
-              <Link to="." className="hover:opacity-90">The Greatt Redeemer</Link>
+              <Link to="." className="hover:opacity-90">The Great Redeemer</Link>
             </div>
             <div className="flex flex-wrap justify-center gap-2 md:mt-0">
               {/* Use relative links so they honor basename ("/" vs "/admin"). */}

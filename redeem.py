@@ -26,6 +26,8 @@ import time
 from typing import Dict, Optional
 
 import requests
+from wos_redeem.utils import save_failure_captcha
+from wos_redeem.solver import solve_captcha_via_openrouter as lib_solve, CaptchaSolverError
 
 # ----- API endpoints and constants -----
 BASE = "https://wos-giftcode-api.centurygame.com/api"
@@ -121,98 +123,8 @@ def call_gift_code(fid: int, cdk: str, captcha_code: str, dump: bool = False, t:
     return post_form("/gift_code", payload)
 
 
-# ---------- OpenRouter captcha solver ----------
-def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int = 2) -> str:
-    """
-    Ask OpenRouter's google/gemini-2.0-flash-exp:free to output ONLY:
-      {"captcha":"ZMPV"}
-    Validate strictly with ^[A-Za-z0-9]{4}$.
-    We pass the captcha image as an image_url (data URL) directly; no disk writes.
-    """
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        # Optional but recommended by OpenRouter (not strictly required):
-        # "HTTP-Referer": "https://your.app/endpoint",
-        # "X-Title": "WOS Gift Code Redeemer",
-    }
-
-    system_prompt = (
-        "You are a vision assistant that reads short CAPTCHA images.\n"
-        "Rules:\n"
-        " - The CAPTCHA is exactly 4 case-sensitive alphanumeric characters [A-Za-z0-9].\n"
-        " - Do not include spaces or quotes.\n"
-        " - Respond ONLY with a compact JSON object of the form: {\"captcha\":\"AB12\"}.\n"
-        " - If uncertain, return your best guess in the same JSON format."
-    )
-
-    user_text = (
-        "Read the 4-character CAPTCHA exactly (case-sensitive alphanumerics only). "
-        "Return ONLY JSON: {\"captcha\":\"XXXX\"}."
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_text},
-                {"type": "image_url", "image_url": {"url": data_url}},
-            ],
-        },
-    ]
-
-    payload = {
-        "model": OPENROUTER_MODEL,
-        "messages": messages,
-        # Keep small; we only expect a tiny JSON object
-        "max_tokens": 20,
-        # If your OpenRouter/underlying model supports function/JSON modes, you could add them here.
-    }
-
-    last_err = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            last_err = f"OpenRouter HTTP error: {e}"
-            continue
-
-        try:
-            content = data["choices"][0]["message"]["content"]
-            # content may be pure JSON or text with JSON; handle both
-            # Strip markdown fences if present
-            content_clean = content.strip()
-            if content_clean.startswith("```"):
-                # Extract the last JSON block inside fences
-                m = re.search(r"\{.*\}", content_clean, flags=re.DOTALL)
-                if m:
-                    content_clean = m.group(0)
-
-            # Try parse as JSON
-            captcha = None
-            try:
-                obj = json.loads(content_clean)
-                if isinstance(obj, dict) and "captcha" in obj:
-                    captcha = str(obj["captcha"]).strip()
-            except json.JSONDecodeError:
-                # Fallback: extract 4-char alnum anywhere in the string
-                m = re.search(CAPTCHA_REGEX, content_clean)
-                if m:
-                    captcha = m.group(0)
-
-            if not captcha or not CAPTCHA_REGEX.fullmatch(captcha):
-                last_err = f"Invalid captcha format from model: {content_clean[:200]!r}"
-                continue
-
-            return captcha
-        except Exception as e:
-            last_err = f"OpenRouter parse error: {e}"
-            continue
-
-    raise RuntimeError(last_err or "OpenRouter failed to produce a valid captcha")
+# Use shared library solver with explicit guess in exceptions
+solve_captcha_via_openrouter = lib_solve
 
 
 # ---------- main ----------
@@ -262,8 +174,17 @@ def main():
     print("[2b] Solving captcha via OpenRouter (google/gemini-2.0-flash-exp:free) ...")
     try:
         captcha_code = solve_captcha_via_openrouter(data_url, api_key, max_attempts=1)
-    except Exception as e:
+    except CaptchaSolverError as e:
         print("❌ OpenRouter error:", e, file=sys.stderr)
+        # Save the captcha image with the explicit attempted guess from the solver
+        try:
+            out_path = save_failure_captcha(data_url, fid=fid, guess=(e.guess or "none"), reason="openrouter_error")
+            print("  saved failed captcha to:", out_path)
+        except Exception as se:
+            print("  warning: unable to save failure captcha:", se)
+        sys.exit(1)
+    except Exception as e:
+        print("❌ OpenRouter HTTP/unknown error:", e, file=sys.stderr)
         sys.exit(1)
     print(f"CAPTCHA: {captcha_code}")
 
@@ -279,23 +200,16 @@ def main():
     if redeem.get("code") == 0:
         print("✅ Redeem success")
     else:
-        print(f"⚠️  Redeem not successful (code={redeem.get('code')}, err_code={redeem.get('err_code')}): {redeem.get('msg')}")
-        # Save the captcha image for debugging (unique, timestamped)
-        try:
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            os.makedirs("failures", exist_ok=True)
-            # derive extension if available
-            ext = "jpg"
-            m = re.match(r"^data:(image/(\w+));base64,", data_url)
-            if m and m.group(2):
-                ext = m.group(2).lower()
-            # include the model's returned captcha guess in the filename for easier triage
-            guess = captcha_code if CAPTCHA_REGEX.fullmatch(captcha_code or "") else "unknown"
-            out_path = os.path.join("failures", f"captcha_{ts}_fid{fid}_{guess}.{ext}")
-            save_data_url_image(data_url, out_path)
-            print("  saved failed captcha to:", out_path)
-        except Exception as e:
-            print("  warning: unable to save failure captcha:", e)
+        msg = redeem.get('msg')
+        print(f"⚠️  Redeem not successful (code={redeem.get('code')}, err_code={redeem.get('err_code')}): {msg}")
+        # Only save when the backend reports CAPTCHA CHECK ERROR
+        msg_norm = (str(msg) if isinstance(msg, str) else "").strip().rstrip(".").upper()
+        if msg_norm == "CAPTCHA CHECK ERROR":
+            try:
+                out_path = save_failure_captcha(data_url, fid=fid, guess=(captcha_code or "none"), reason="captcha_check_error")
+                print("  saved failed captcha to:", out_path)
+            except Exception as e:
+                print("  warning: unable to save failure captcha:", e)
 
 
 if __name__ == "__main__":

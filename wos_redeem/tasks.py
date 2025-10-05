@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 
 from .db import SessionLocal, GiftCode, User, Redemption, RedemptionAttempt, RedemptionStatus
 from . import api
-from .solver import solve_captcha_via_openrouter
+from .solver import solve_captcha_via_openrouter, CaptchaSolverError
+from .utils import save_failure_captcha
 
 
 RSS_URL = "https://wosgiftcodes.com/rss.php"
@@ -214,8 +215,33 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         try:
                             captcha = solve_captcha_via_openrouter(data_url, api_key)
                             print(f"[worker] fid={user.fid} openrouter captcha={captcha}", flush=True)
-                        except Exception as e:
+                        except CaptchaSolverError as e:
                             print(f"[worker] fid={user.fid} openrouter error: {e}", flush=True)
+                            # Persist the CAPTCHA image with the exact attempted guess
+                            try:
+                                out_path = save_failure_captcha(
+                                    data_url,
+                                    fid=user.fid,
+                                    guess=(e.guess or "none"),
+                                    reason="openrouter_error",
+                                )
+                                print(f"[worker] saved failed captcha to: {out_path}", flush=True)
+                            except Exception:
+                                pass
+                            att = RedemptionAttempt(
+                                redemption_id=redemption.id,
+                                attempt_no=redemption.attempt_count + 1,
+                                result_msg=f"solver error: {e}",
+                            )
+                            db.add(att)
+                            redemption.attempt_count += 1
+                            redemption.last_attempt_at = datetime.utcnow()
+                            db.commit()
+                            errors += 1
+                            continue
+                        except Exception as e:
+                            # Non-parsing errors (e.g., HTTP) — do not save image per requirements
+                            print(f"[worker] fid={user.fid} openrouter HTTP/unknown error: {e}", flush=True)
                             att = RedemptionAttempt(
                                 redemption_id=redemption.id,
                                 attempt_no=redemption.attempt_count + 1,
@@ -261,6 +287,12 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 errors += 1
                         elif msg_norm == "CAPTCHA CHECK ERROR":
                             print(f"[worker] fid={user.fid} captcha wrong; will retry later", flush=True)
+                            # Save the image with the incorrect guess
+                            try:
+                                out_path = save_failure_captcha(data_url, fid=user.fid, guess=captcha, reason="captcha_check_error")
+                                print(f"[worker] saved failed captcha to: {out_path}", flush=True)
+                            except Exception:
+                                pass
                             errors += 1
                         redemption.err_code = err_code if isinstance(err_code, int) else None
                         redemption.last_attempt_at = datetime.utcnow()
