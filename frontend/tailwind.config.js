@@ -4,7 +4,25 @@ export default {
     './index.html',
     './src/**/*.{ts,tsx}',
   ],
-  theme: { extend: {} },
+  theme: { 
+    extend: {
+      keyframes: {
+        slideDownFade: {
+          '0%': { transform: 'translateY(-8px)', opacity: '0' },
+          '100%': { transform: 'translateY(0)', opacity: '1' },
+        },
+        slideUpFade: {
+          '0%': { transform: 'translateY(8px)', opacity: '0' },
+          '100%': { transform: 'translateY(0)', opacity: '1' },
+        },
+      },
+      animation: {
+        'slide-down-fade': 'slideDownFade 500ms ease-in-out',
+        'slide-up-fade': 'slideUpFade 500ms ease-in-out',
+        'spin-slow': 'spin 2s linear infinite',
+      },
+    }
+  },
   plugins: [require('daisyui')],
   daisyui: {
     themes: [

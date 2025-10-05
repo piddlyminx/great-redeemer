@@ -11,13 +11,17 @@ export default function App() {
 
       <div className="navbar bg-base-100/80 backdrop-blur border-b border-white/5">
         <div className="max-w-4xl mx-auto w-full px-3">
-          <div className="flex-1 font-semibold tracking-wide">WOS Redeemer</div>
-          <div className="flex gap-2">
-            {/* Use relative links so they honor basename ("/" vs "/admin"). */}
-            <Link className="btn btn-ghost" to=".">Dashboard</Link>
-            <Link className="btn btn-ghost" to="users">Users</Link>
-            <Link className="btn btn-ghost" to="codes">Codes</Link>
-            {/* Alliances and Monitoring links removed by request */}
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+            <div className="font-semibold tracking-wide text-xl md:text-lg text-center md:text-left">
+              <Link to="." className="hover:opacity-90">The Greatt Redeemer</Link>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {/* Use relative links so they honor basename ("/" vs "/admin"). */}
+              <Link className="btn btn-ghost" to=".">Dashboard</Link>
+              <Link className="btn btn-ghost" to="users">Users</Link>
+              <Link className="btn btn-ghost" to="codes">Codes</Link>
+              {/* Alliances and Monitoring links removed by request */}
+            </div>
           </div>
         </div>
       </div>

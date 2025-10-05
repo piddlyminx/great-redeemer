@@ -322,6 +322,18 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
             current = w.get("current")
     except Exception:
         current = None
+    # Enrich current with user name if possible
+    try:
+        if current and current.get("user_id"):
+            u = db.get(User, int(current["user_id"]))
+            if u:
+                current["name"] = u.name
+        elif current and current.get("fid"):
+            u = db.scalar(select(User).where(User.fid == int(current["fid"])) )
+            if u:
+                current["name"] = u.name
+    except Exception:
+        pass
 
     # recent attempts joined with user fid and code
     recents = []
@@ -338,6 +350,7 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
             "id": att.id,
             "ts": att.created_at.isoformat() if att.created_at else None,
             "fid": user.fid,
+            "name": user.name,
             "code": code.code,
             "err": att.err_code,
             "msg": att.result_msg[:120] if att.result_msg else None,
@@ -364,7 +377,7 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
                 continue
             if red and red.last_attempt_at and red.last_attempt_at > cutoff:
                 continue
-            upcoming.append({"fid": user.fid, "user_id": user.id, "code": code.code, "gift_code_id": code.id})
+            upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
 
     return {"current": current, "recent": recents, "upcoming": upcoming[:limit]}
 

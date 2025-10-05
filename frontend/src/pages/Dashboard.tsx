@@ -22,9 +22,9 @@ export default function Dashboard() {
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
       {/* Signup */}
       <div className="md:col-span-4 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
-        <div className="card-body">
-          <div className="text-sm text-base-content/60">Sign up for automatic rewards</div>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+        <div className="card-body pt-4 md:pt-5">
+          <div className="text-base md:text-lg font-medium text-base-content/80 text-center md:text-left mb-3">Sign up for automatic rewards</div>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-2 md:gap-3">
             <input className="input input-bordered" placeholder="User ID (FID)" value={fid} onChange={e=>setFid(e.target.value)} />
             <input className="input input-bordered" placeholder="Username" value={name} onChange={e=>setName(e.target.value)} />
             <select className="select select-bordered" value={alliance} onChange={e=>setAlliance(e.target.value ? Number(e.target.value) : '')}>
@@ -51,7 +51,7 @@ export default function Dashboard() {
             'card shadow-2xl border border-white/10 backdrop-blur bg-base-100/80'
           }
         >
-          <div className={'card-body relative overflow-hidden'}>
+          <div className={'card-body relative overflow-hidden items-center text-center py-4'}>
             <div
               className={
                 'text-xs uppercase tracking-wide mb-1 text-base-content/60'
@@ -59,7 +59,7 @@ export default function Dashboard() {
             >
               {card.label}
             </div>
-            <div className="text-3xl font-semibold tracking-tight">
+            <div className="text-2xl font-semibold tracking-tight">
               {data ? data[card.k] : '—'}
             </div>
             <div
@@ -81,52 +81,17 @@ export default function Dashboard() {
         <div className="md:col-span-4 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
           <div className="card-body">
             <div className="text-sm text-base-content/60">Worker</div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
               <Stat label="Attempts" value={data.worker_status.attempts ?? '—'} />
               <Stat label="Successes" value={data.worker_status.successes ?? '—'} />
               <Stat label="Errors" value={data.worker_status.errors ?? '—'} />
               <Stat label="Sleep (s)" value={data.worker_status.sleep ?? '—'} />
             </div>
-            <div className="text-xs text-base-content/60">
+            <div className="text-xs text-base-content/60 text-center md:text-left">
               Last update: {formatAgo(data.worker_status.ts)}
             </div>
-            {/* Live queue */}
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="p-3 rounded bg-base-300/20 ring-1 ring-white/5">
-                <div className="text-xs text-base-content/60 mb-1">Current</div>
-                {peek?.current ? (
-                  <div className="flex items-center gap-2 animate-pulse">
-                    <span className="badge badge-info">FID {peek.current.fid}</span>
-                    <span className="badge badge-success badge-outline">{peek.current.code}</span>
-                  </div>
-                ) : '—'}
-              </div>
-              <div className="p-3 rounded bg-base-300/20 ring-1 ring-white/5">
-                <div className="text-xs text-base-content/60 mb-1">Up next</div>
-                <div className="space-y-1">
-                  {(peek?.upcoming||[]).slice(0,2).map((p:any, i:number)=> (
-                    <div key={i} className="flex items-center gap-2">
-                      <span className="badge badge-info">FID {p.fid}</span>
-                      <span className="badge badge-outline">{p.code}</span>
-                    </div>
-                  ))}
-                  {(!peek || (peek.upcoming||[]).length===0) && '—'}
-                </div>
-              </div>
-              <div className="p-3 rounded bg-base-300/20 ring-1 ring-white/5">
-                <div className="text-xs text-base-content/60 mb-1">Recent</div>
-                <div className="space-y-1">
-                  {(peek?.recent||[]).slice(0,3).map((r:any)=> (
-                    <div key={r.id} className="flex items-center gap-2 text-sm">
-                      <span className="badge badge-ghost">{r.code}</span>
-                      <span className="text-base-content/60">FID {r.fid}</span>
-                      <span className={r.err ? 'text-error/80' : 'text-success/80'}>{r.err ? `err ${r.err}` : 'ok'}</span>
-                    </div>
-                  ))}
-                  {(!peek || (peek.recent||[]).length===0) && '—'}
-                </div>
-              </div>
-            </div>
+            {/* Activity carousel */}
+            <ActivityCarousel peek={peek} />
           </div>
         </div>
       ) : (
@@ -152,7 +117,7 @@ export default function Dashboard() {
 
 function Stat({ label, value }: { label: string, value: any }) {
   return (
-    <div className="p-3 rounded bg-base-300/20 ring-1 ring-white/5">
+    <div className="p-3 rounded bg-base-300/20 ring-1 ring-white/5 text-center">
       <div className="text-xs text-base-content/60">{label}</div>
       <div className="text-xl font-semibold">{value}</div>
     </div>
@@ -169,4 +134,45 @@ function formatAgo(iso?: string) {
   if (m < 60) return `${m}m ago`
   const h = Math.floor(m / 60)
   return `${h}h ago`
+}
+
+function ActivityCarousel({ peek }: { peek: any }) {
+  const items: Array<{ key: string, label: string, sub: string, status: 'active'|'success'|'error'|'queued' }>= []
+  if (peek?.upcoming?.length) {
+    const up = [...peek.upcoming].slice(0,2).reverse()
+    up.forEach((u:any, idx:number)=> items.push({ key: `up-${idx}-${u.fid}-${u.code}`, label: u.name || `FID ${u.fid}` , sub: u.code, status: 'queued' }))
+  }
+  if (peek?.current) {
+    items.push({ key: `cur-${peek.current.fid}-${peek.current.code}`, label: peek.current.name || `FID ${peek.current.fid}`, sub: peek.current.code, status: 'active' })
+  } else {
+    items.push({ key: 'cur-none', label: '—', sub: '', status: 'queued' })
+  }
+  if (peek?.recent?.length) {
+    const rc = [...peek.recent].slice(0,2)
+    rc.forEach((r:any)=> items.push({ key: `rc-${r.id}`, label: r.name || `FID ${r.fid}`, sub: r.code, status: r.err ? 'error' : 'success' }))
+  }
+  while (items.length < 5) items.push({ key: `pad-${items.length}`, label: '—', sub: '', status: 'queued' })
+
+  return (
+    <div className="mt-4">
+      <div className="text-xs text-base-content/60 text-center md:text-left mb-2">Activity</div>
+      <div className="relative mx-auto md:mx-0 max-w-sm">
+        <div className="overflow-hidden rounded-lg ring-1 ring-white/5 bg-base-300/20 px-3 py-2">
+          <div className="grid grid-rows-5 gap-2 relative">
+            {items.slice(0,5).map((it, idx)=> (
+              <div key={it.key} className={`flex items-center justify-between px-2 py-1 rounded-full text-sm animate-slide-down-fade ${idx===2 ? 'ring-2 ring-primary/70 relative' : ''}`}>
+                <div className={`badge ${it.status==='success' ? 'badge-success' : it.status==='error' ? 'badge-error' : 'badge-ghost'} gap-2`}>{it.label}</div>
+                <div className={`badge ${it.status==='active' ? 'badge-info' : 'badge-outline'}`}>{it.sub}</div>
+                {idx===2 && (
+                  <div className="absolute -right-1 -top-1 md:right-2 md:top-2 text-primary opacity-80">
+                    <span className="inline-block animate-spin-slow">⚙️</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
