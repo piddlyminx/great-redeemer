@@ -271,6 +271,33 @@ def api_create_alliance(name: str = Form(...), tag: str = Form(...), quota: int 
     return {"ok": True, "id": a.id}
 
 
+@app.post("/api/alliances/{alliance_id}")
+def api_update_alliance(
+    alliance_id: int,
+    name: Optional[str] = Form(None),
+    tag: Optional[str] = Form(None),
+    quota: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+):
+    if not DISABLE_AUTH_ALL:
+        _require(True)
+    a = db.get(Alliance, alliance_id)
+    if not a:
+        raise HTTPException(404)
+    if name is not None:
+        a.name = name.strip()
+    if tag is not None:
+        # Preserve case as requested
+        a.tag = tag.strip()
+    if quota is not None:
+        try:
+            a.quota = max(0, int(quota))
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid quota")
+    db.commit()
+    return {"ok": True}
+
+
 @app.get("/api/worker_peek")
 def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
     """Return a small snapshot of the worker state and upcoming work.

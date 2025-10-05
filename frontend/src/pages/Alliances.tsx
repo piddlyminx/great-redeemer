@@ -5,6 +5,8 @@ export default function Alliances() {
   const [rows, setRows] = useState<any[]>([])
   const [form, setForm] = useState({ name: '', tag: '', quota: 0 })
   const [mgr, setMgr] = useState<Record<number, {username: string, password: string, rank: 'R4'|'R5'}>>({})
+  const [editingId, setEditingId] = useState<number|null>(null)
+  const [draft, setDraft] = useState<{name: string, tag: string, quota: number}>({name:'', tag:'', quota:0})
   const load = () => fetch(`${API_BASE}/alliances`).then(r => r.json()).then(setRows)
   useEffect(() => { load() }, [])
   const onMgrChange = (aid: number, patch: Partial<{username: string, password: string, rank: 'R4'|'R5'}>) => {
@@ -35,13 +37,25 @@ export default function Alliances() {
         <div className="font-semibold mb-2 pl-3 border-l-2 border-sky-400/60">Alliances</div>
         <div className="overflow-x-auto rounded-lg ring-1 ring-white/5">
           <table className="table table-zebra">
-            <thead><tr><th>Name</th><th>Tag</th><th>Quota</th><th>Members</th><th>Managers</th><th>Add Manager</th></tr></thead>
+            <thead><tr><th>Name</th><th>Tag</th><th>Quota</th><th>Members</th><th>Managers</th><th>Add Manager</th><th>Actions</th></tr></thead>
             <tbody>
               {rows.map((a:any)=> (
                 <tr key={a.id}>
-                  <td>{a.name}</td>
-                  <td><span className="badge badge-neutral">{a.tag}</span></td>
-                  <td>{a.quota}</td>
+                  <td>
+                    {editingId===a.id ? (
+                      <input className="input input-bordered input-sm w-full" value={draft.name} onChange={e=>setDraft({...draft, name:e.target.value})} />
+                    ) : a.name}
+                  </td>
+                  <td>
+                    {editingId===a.id ? (
+                      <input className="input input-bordered input-sm w-24" value={draft.tag} onChange={e=>setDraft({...draft, tag:e.target.value})} />
+                    ) : <span className="badge badge-neutral">{a.tag}</span>}
+                  </td>
+                  <td>
+                    {editingId===a.id ? (
+                      <input type="number" className="input input-bordered input-sm w-24" value={draft.quota} onChange={e=>setDraft({...draft, quota:Number(e.target.value)})} />
+                    ) : a.quota}
+                  </td>
                   <td>{a.members}</td>
                   <td className="space-x-1">
                     {(a.managers||[]).length===0 ? '—' : (a.managers||[]).map((m:any)=> <span key={m.id} className="badge">{m.username} ({m.rank})</span>)}
@@ -56,6 +70,21 @@ export default function Alliances() {
                       </select>
                       <button className="btn btn-primary btn-sm" onClick={()=>addMgr(a.id)}>Add</button>
                     </div>
+                  </td>
+                  <td className="w-28">
+                    {editingId===a.id ? (
+                      <div className="flex gap-1">
+                        <button className="btn btn-success btn-sm" title="Save" onClick={async()=>{
+                          const params = new URLSearchParams({ name: draft.name, tag: draft.tag, quota: String(draft.quota) })
+                          await fetch(`${API_BASE}/alliances/${a.id}`, { method:'POST', body: params })
+                          setEditingId(null)
+                          load()
+                        }}>✔️</button>
+                        <button className="btn btn-ghost btn-sm" title="Cancel" onClick={()=>setEditingId(null)}>✖️</button>
+                      </div>
+                    ) : (
+                      <button className="btn btn-ghost btn-sm" title="Edit" onClick={()=>{ setEditingId(a.id); setDraft({ name: a.name||'', tag: a.tag||'', quota: a.quota||0 }) }}>✏️</button>
+                    )}
                   </td>
                 </tr>
               ))}
