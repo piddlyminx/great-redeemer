@@ -14,8 +14,21 @@ export default function Dashboard() {
     fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => setData(null))
     fetch(`${API_BASE}/alliances`).then(r=>r.json()).then(setAlliances).catch(()=>setAlliances([]))
     fetch(`${API_BASE}/codes`).then(r=>r.json()).then(setCodes).catch(()=>setCodes([]))
+
     let es: EventSource | null = null
-    let id: any
+    let pollId: any = null
+
+    const startPoll = () => {
+      if (pollId) return
+      // Immediate tick to avoid initial delay
+      fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => {})
+      fetch(`${API_BASE}/worker_peek?limit=5`).then(r=>r.json()).then(setPeek).catch(()=>{})
+      pollId = setInterval(() => {
+        fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => {})
+        fetch(`${API_BASE}/worker_peek?limit=5`).then(r=>r.json()).then(setPeek).catch(()=>{})
+      }, 3000)
+    }
+
     try {
       es = new EventSource(`${API_BASE}/worker_events`)
       es.onmessage = (ev) => {
@@ -25,15 +38,19 @@ export default function Dashboard() {
           if (msg.peek) setPeek(msg.peek)
         } catch {}
       }
-      es.onerror = () => { es?.close(); es = null }
-    } catch {}
-    if (!es) {
-      id = setInterval(() => {
-        fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => {})
-        fetch(`${API_BASE}/worker_peek?limit=5`).then(r=>r.json()).then(setPeek).catch(()=>{})
-      }, 3000)
+      es.onerror = () => {
+        try { es?.close() } catch {}
+        es = null
+        startPoll()
+      }
+    } catch {
+      // If EventSource construction fails (unsupported), fallback to polling
+      startPoll()
     }
-    return () => { if (id) clearInterval(id); if (es) es.close() }
+
+    if (!es) startPoll()
+
+    return () => { if (pollId) clearInterval(pollId); try { es?.close() } catch {} }
   }, [])
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
