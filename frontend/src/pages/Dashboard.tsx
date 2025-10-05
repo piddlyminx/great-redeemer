@@ -180,6 +180,11 @@ function ActivityCarousel({ peek }: { peek: any }) {
     { key: 'rc-1', text: '—', status: 'queued' },
   ]
 
+  // Backward-compat: some earlier render logic referenced a local `items` variable.
+  // Keep an alias so builds never trip a ReferenceError even if the template
+  // is not fully updated everywhere.
+  const items = rows
+
   if (up[0]) rows[0] = { key: `up-${up[0].fid}-${up[0].code}`, text: `${up[0].name || `FID ${up[0].fid}`} — ${up[0].code}`, status: 'queued' }
   if (up[1]) rows[1] = { key: `up-${up[1].fid}-${up[1].code}`, text: `${up[1].name || `FID ${up[1].fid}`} — ${up[1].code}`, status: 'queued' }
   if (cur) rows[2] = { key: `cur-${cur.fid}-${cur.code}`, text: `${cur.name || `FID ${cur.fid}`} — ${cur.code}`, status: 'active' }
