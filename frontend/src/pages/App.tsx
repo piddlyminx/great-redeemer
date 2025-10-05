@@ -11,7 +11,7 @@ export default function App() {
 
       <div className="navbar w-full bg-base-100/80 backdrop-blur border-b border-white/5 p-0">
         <div className="container-balanced w-full">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 py-2">
+          <div className="flex w-full flex-col md:flex-row md:items-center md:justify-between gap-2 py-2">
             <div className="font-semibold tracking-wide text-xl md:text-lg text-center md:text-left">
               <Link to="." className="hover:opacity-90">The Greatt Redeemer</Link>
             </div>
