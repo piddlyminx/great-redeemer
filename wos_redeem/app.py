@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+import re
 import os
 from typing import Optional
 
@@ -264,8 +265,11 @@ def api_create_alliance(name: str = Form(...), tag: str = Form(...), quota: int 
     if not DISABLE_AUTH_ALL:
         # simple check: placeholder for future auth
         _require(True)
-    # Preserve user-provided case for the 3-letter alliance tag
-    a = Alliance(name=name.strip(), tag=tag.strip(), quota=max(0, int(quota)))
+    # Validate and preserve user-provided case for the 3-letter alliance tag
+    tag_val = (tag or "").strip()
+    if not re.fullmatch(r"[A-Za-z]{3}", tag_val):
+        raise HTTPException(status_code=400, detail="tag must be exactly 3 letters")
+    a = Alliance(name=name.strip(), tag=tag_val, quota=max(0, int(quota)))
     db.add(a)
     db.commit()
     return {"ok": True, "id": a.id}
@@ -287,8 +291,11 @@ def api_update_alliance(
     if name is not None:
         a.name = name.strip()
     if tag is not None:
+        tval = tag.strip()
+        if not re.fullmatch(r"[A-Za-z]{3}", tval):
+            raise HTTPException(status_code=400, detail="tag must be exactly 3 letters")
         # Preserve case as requested
-        a.tag = tag.strip()
+        a.tag = tval
     if quota is not None:
         try:
             a.quota = max(0, int(quota))

@@ -28,9 +28,30 @@ export default function Alliances() {
         <div className="font-semibold pl-3 border-l-2 border-violet-400/60">Create Alliance</div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <input className="input input-bordered" placeholder="Name" value={form.name} onChange={e=>setForm({...form, name:e.target.value})}/>
-          <input className="input input-bordered" placeholder="TAG" value={form.tag} onChange={e=>setForm({...form, tag:e.target.value})}/>
+          <input
+            className="input input-bordered"
+            placeholder="TAG (3 letters)"
+            value={form.tag}
+            maxLength={3}
+            pattern="[A-Za-z]{3}"
+            title="Exactly 3 letters"
+            onChange={e=>{
+              const v = e.target.value.replace(/[^A-Za-z]/g,'').slice(0,3)
+              setForm({...form, tag:v})
+            }}
+          />
           <input className="input input-bordered" placeholder="Quota" type="number" value={form.quota} onChange={e=>setForm({...form, quota:Number(e.target.value)})}/>
-          <button className="btn btn-primary" onClick={async()=>{await fetch(`${API_BASE}/alliances`,{method:'POST',body:new URLSearchParams({name:form.name, tag:form.tag, quota:String(form.quota)})}); setForm({name:'',tag:'',quota:0}); load()}}>Create</button>
+          <button
+            className="btn btn-primary"
+            disabled={!(form.name.trim() && /^[A-Za-z]{3}$/.test(form.tag) && form.quota>=0)}
+            onClick={async()=>{
+              const params = new URLSearchParams({name:form.name, tag:form.tag, quota:String(form.quota)})
+              const resp = await fetch(`${API_BASE}/alliances`,{method:'POST',body:params})
+              if(!resp.ok){ alert('Create failed'); return }
+              setForm({name:'',tag:'',quota:0});
+              load()
+            }}
+          >Create</button>
         </div>
       </div></div>
       <div className="card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur"><div className="card-body">
@@ -48,7 +69,14 @@ export default function Alliances() {
                   </td>
                   <td>
                     {editingId===a.id ? (
-                      <input className="input input-bordered input-sm w-24" value={draft.tag} onChange={e=>setDraft({...draft, tag:e.target.value})} />
+                      <input
+                        className="input input-bordered input-sm w-24"
+                        value={draft.tag}
+                        maxLength={3}
+                        pattern="[A-Za-z]{3}"
+                        title="Exactly 3 letters"
+                        onChange={e=>setDraft({...draft, tag:e.target.value.replace(/[^A-Za-z]/g,'').slice(0,3)})}
+                      />
                     ) : <span className="badge badge-neutral">{a.tag}</span>}
                   </td>
                   <td>
@@ -74,12 +102,23 @@ export default function Alliances() {
                   <td className="w-28">
                     {editingId===a.id ? (
                       <div className="flex gap-1">
-                        <button className="btn btn-success btn-sm" title="Save" onClick={async()=>{
-                          const params = new URLSearchParams({ name: draft.name, tag: draft.tag, quota: String(draft.quota) })
-                          await fetch(`${API_BASE}/alliances/${a.id}`, { method:'POST', body: params })
-                          setEditingId(null)
-                          load()
-                        }}>✔️</button>
+                        <button
+                          className="btn btn-success btn-sm"
+                          title="Save"
+                          disabled={!(draft.name.trim() && /^[A-Za-z]{3}$/.test(draft.tag) && draft.quota>=0)}
+                          onClick={async()=>{
+                            const params = new URLSearchParams({ name: draft.name, tag: draft.tag, quota: String(draft.quota) })
+                            const resp = await fetch(`${API_BASE}/alliances/${a.id}`, { method:'POST', body: params })
+                            if(!resp.ok){
+                              const msg = await resp.text().catch(()=> 'Update failed')
+                              alert(msg || 'Update failed')
+                              return
+                            }
+                            // Update row in-place without reloading the page
+                            setRows(prev => prev.map(r => r.id===a.id ? { ...r, name: draft.name, tag: draft.tag, quota: draft.quota } : r))
+                            setEditingId(null)
+                          }}
+                        >✔️</button>
                         <button className="btn btn-ghost btn-sm" title="Cancel" onClick={()=>setEditingId(null)}>✖️</button>
                       </div>
                     ) : (
