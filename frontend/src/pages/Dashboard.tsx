@@ -126,21 +126,25 @@ function formatAgo(iso?: string) {
 }
 
 function ActivityCarousel({ peek }: { peek: any }) {
-  const items: Array<{ key: string, label: string, sub: string, status: 'active'|'success'|'error'|'queued' }>= []
+  type Item = { key: string, text: string, status: 'active'|'success'|'error'|'queued' }
+  const items: Item[] = []
+  // Upcoming (top)
   if (peek?.upcoming?.length) {
     const up = [...peek.upcoming].slice(0,2).reverse()
-    up.forEach((u:any, idx:number)=> items.push({ key: `up-${idx}-${u.fid}-${u.code}`, label: u.name || `FID ${u.fid}` , sub: u.code, status: 'queued' }))
+    up.forEach((u:any, idx:number)=> items.push({ key: `up-${idx}-${u.fid}-${u.code}`, text: `${u.name || `FID ${u.fid}`} — ${u.code}`, status: 'queued' }))
   }
+  // Current (middle)
   if (peek?.current) {
-    items.push({ key: `cur-${peek.current.fid}-${peek.current.code}`, label: peek.current.name || `FID ${peek.current.fid}`, sub: peek.current.code, status: 'active' })
+    items.push({ key: `cur-${peek.current.fid}-${peek.current.code}`, text: `${peek.current.name || `FID ${peek.current.fid}`} — ${peek.current.code}` , status: 'active' })
   } else {
-    items.push({ key: 'cur-none', label: '—', sub: '', status: 'queued' })
+    items.push({ key: 'cur-none', text: '—', status: 'queued' })
   }
+  // Recent (bottom)
   if (peek?.recent?.length) {
     const rc = [...peek.recent].slice(0,2)
-    rc.forEach((r:any)=> items.push({ key: `rc-${r.id}`, label: r.name || `FID ${r.fid}`, sub: r.code, status: r.err ? 'error' : 'success' }))
+    rc.forEach((r:any)=> items.push({ key: `rc-${r.id}`, text: `${r.name || `FID ${r.fid}`} — ${r.code}`, status: r.err ? 'error' : 'success' }))
   }
-  while (items.length < 5) items.push({ key: `pad-${items.length}`, label: '—', sub: '', status: 'queued' })
+  while (items.length < 5) items.push({ key: `pad-${items.length}`, text: '—', status: 'queued' })
 
   return (
     <div className="mt-4">
@@ -148,17 +152,19 @@ function ActivityCarousel({ peek }: { peek: any }) {
       <div className="relative mx-auto md:mx-0 max-w-sm">
         <div className="overflow-hidden rounded-lg ring-1 ring-white/5 bg-base-300/20 px-3 py-2">
           <div className="grid grid-rows-5 gap-2 relative">
-            {items.slice(0,5).map((it, idx)=> (
-              <div key={it.key} className={`flex items-center justify-between px-2 py-1 rounded-full text-sm animate-slide-down-fade ${idx===2 ? 'ring-2 ring-primary/70 relative' : ''}`}>
-                <div className={`badge ${it.status==='success' ? 'badge-success' : it.status==='error' ? 'badge-error' : 'badge-ghost'} gap-2`}>{it.label}</div>
-                <div className={`badge ${it.status==='active' ? 'badge-info' : 'badge-outline'}`}>{it.sub}</div>
-                {idx===2 && (
-                  <div className="absolute -right-1 -top-1 md:right-2 md:top-2 text-primary opacity-80">
-                    <span className="inline-block animate-spin-slow">⚙️</span>
-                  </div>
-                )}
-              </div>
-            ))}
+            {items.slice(0,5).map((it, idx)=> {
+              const badgeClass = it.status==='success' ? 'badge-success' : it.status==='error' ? 'badge-error' : it.status==='active' ? 'badge-info' : 'badge-ghost'
+              return (
+                <div key={it.key} className={`relative flex items-center justify-center px-2 py-1 rounded-full text-sm animate-slide-down-fade ${idx===2 ? 'ring-2 ring-primary/70' : ''}`}>
+                  <div className={`badge ${badgeClass} gap-2 whitespace-nowrap`}>{it.text}</div>
+                  {idx===2 && it.status==='active' && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-primary/90">
+                      <span className="inline-block animate-spin-slow">⚙️</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>
