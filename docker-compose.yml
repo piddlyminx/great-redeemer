@@ -29,7 +29,6 @@ services:
       DATABASE_URL: postgresql+psycopg://wos:wos@db:5432/wos
       # Optional: provide secrets via environment or docker secrets
       WOS_SECRET: ${WOS_SECRET:-tB87#kPtkxqOS2}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       START_WORKERS: "0"  # workers run in separate service
       BASE_PATH: /
       # Toggle to require auth for read-only pages as well
@@ -78,7 +77,6 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://wos:wos@db:5432/wos
       WOS_SECRET: ${WOS_SECRET:-tB87#kPtkxqOS2}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       REDEEM_MAX_ATTEMPTS_PER_CYCLE: ${REDEEM_MAX_ATTEMPTS_PER_CYCLE:-1}
       REDEEM_DELAY_S: ${REDEEM_DELAY_S:-5}
       STATUS_DIR: /state
