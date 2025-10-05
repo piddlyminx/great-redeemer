@@ -15,10 +15,9 @@ export default function App() {
           <div className="flex gap-2">
             {/* Use relative links so they honor basename ("/" vs "/admin"). */}
             <Link className="btn btn-ghost" to=".">Dashboard</Link>
-            <Link className="btn btn-ghost" to="alliances">Alliances</Link>
             <Link className="btn btn-ghost" to="users">Users</Link>
             <Link className="btn btn-ghost" to="codes">Codes</Link>
-            <Link className="btn btn-ghost" to="monitor">Monitoring</Link>
+            {/* Alliances and Monitoring links removed by request */}
           </div>
         </div>
       </div>
