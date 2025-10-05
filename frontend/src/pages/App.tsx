@@ -9,7 +9,7 @@ export default function App() {
       {/* soft radial gradient background */}
       <div className="pointer-events-none absolute inset-0 opacity-50 [background:radial-gradient(1100px_520px_at_80%_-10%,rgba(125,211,252,0.10),transparent_60%),radial-gradient(800px_480px_at_10%_-20%,rgba(167,139,250,0.10),transparent_60%),radial-gradient(700px_420px_at_50%_110%,rgba(34,197,94,0.06),transparent_60%)]" />
 
-      <div className="navbar bg-base-100/80 backdrop-blur border-b border-white/5 p-0">
+      <div className="navbar w-full bg-base-100/80 backdrop-blur border-b border-white/5 p-0">
         <div className="container-balanced w-full">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 py-2">
             <div className="font-semibold tracking-wide text-xl md:text-lg text-center md:text-left">
