@@ -169,6 +169,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         "errors": errors,
                         "sleep": poll_seconds,
                         "note": "no_openrouter_api_key",
+                        "current": None,
                         "eligible": ec,
                     }
                     with open(_status_path(".worker_status"), "w") as f:
@@ -404,6 +405,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                 "successes": successes,
                 "errors": errors,
                 "sleep": poll_seconds,
+                "current": None,  # clear any stale current indicator between cycles
                 "queue_size": len(worker_state.queue),
                 "queue": [
                     {"fid": q.fid, "user_id": q.user_id, "name": q.name, "code": q.code, "gift_code_id": q.gift_code_id}
