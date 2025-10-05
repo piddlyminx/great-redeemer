@@ -12,11 +12,26 @@ export default function Dashboard() {
   useEffect(() => {
     fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => setData(null))
     fetch(`${API_BASE}/alliances`).then(r=>r.json()).then(setAlliances).catch(()=>setAlliances([]))
-    const id = setInterval(() => {
-      fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => {})
-      fetch(`${API_BASE}/worker_peek?limit=5`).then(r=>r.json()).then(setPeek).catch(()=>{})
-    }, 3000)
-    return () => clearInterval(id)
+    let es: EventSource | null = null
+    let id: any
+    try {
+      es = new EventSource(`${API_BASE}/worker_events`)
+      es.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data)
+          if (msg.summary) setData(msg.summary)
+          if (msg.peek) setPeek(msg.peek)
+        } catch {}
+      }
+      es.onerror = () => { es?.close(); es = null }
+    } catch {}
+    if (!es) {
+      id = setInterval(() => {
+        fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => {})
+        fetch(`${API_BASE}/worker_peek?limit=5`).then(r=>r.json()).then(setPeek).catch(()=>{})
+      }, 3000)
+    }
+    return () => { if (id) clearInterval(id); if (es) es.close() }
   }, [])
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -39,44 +54,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-      {[
-        { k: 'users', label: 'Users', accent: 'violet' },
-        { k: 'codes', label: 'Gift Codes', accent: 'sky' },
-        { k: 'success', label: 'Success', accent: 'emerald' },
-        { k: 'pending', label: 'Pending', accent: 'amber' },
-      ].map(card => (
-        <div
-          key={card.k}
-          className={
-            'card shadow-2xl border border-white/10 backdrop-blur bg-base-100/80'
-          }
-        >
-          <div className={'card-body relative overflow-hidden items-center text-center py-4'}>
-            <div
-              className={
-                'text-xs uppercase tracking-wide mb-1 text-base-content/60'
-              }
-            >
-              {card.label}
-            </div>
-            <div className="text-2xl font-semibold tracking-tight">
-              {data ? data[card.k] : '—'}
-            </div>
-            <div
-              className={
-                'absolute left-0 top-0 h-full w-1 ' +
-                (card.accent === 'emerald'
-                  ? 'bg-emerald-400/60'
-                  : card.accent === 'sky'
-                  ? 'bg-sky-400/60'
-                  : card.accent === 'violet'
-                  ? 'bg-violet-400/60'
-                  : 'bg-amber-400/60')
-              }
-            />
-          </div>
-        </div>
-      ))}
+      {/* top-level metric cards moved next to activity carousel */}
       {data?.worker_status ? (
         <div className="md:col-span-4 card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur">
           <div className="card-body">
@@ -90,8 +68,19 @@ export default function Dashboard() {
             <div className="text-xs text-base-content/60 text-center md:text-left">
               Last update: {formatAgo(data.worker_status.ts)}
             </div>
-            {/* Activity carousel */}
-            <ActivityCarousel peek={peek} />
+            {/* Activity + overview metrics: 2-col on desktop, stacked on mobile */}
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+              <ActivityCarousel peek={peek} />
+              <div>
+                <div className="text-xs text-base-content/60 mb-2 text-center md:text-left">Overview</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <MiniStat label="Users" value={data?.users ?? '—'} accent="violet" />
+                  <MiniStat label="Gift Codes" value={data?.codes ?? '—'} accent="sky" />
+                  <MiniStat label="Redeemed" value={data?.success ?? '—'} accent="emerald" />
+                  <MiniStat label="Pending" value={data?.pending ?? '—'} accent="amber" />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       ) : (
@@ -173,6 +162,17 @@ function ActivityCarousel({ peek }: { peek: any }) {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function MiniStat({ label, value, accent }: { label: string, value: any, accent: 'emerald'|'sky'|'violet'|'amber' }) {
+  const bar = accent === 'emerald' ? 'bg-emerald-400/60' : accent === 'sky' ? 'bg-sky-400/60' : accent === 'violet' ? 'bg-violet-400/60' : 'bg-amber-400/60'
+  return (
+    <div className="relative overflow-hidden rounded-lg ring-1 ring-white/5 bg-base-300/20 p-3 text-center">
+      <div className="text-xs uppercase tracking-wide mb-1 text-base-content/60">{label}</div>
+      <div className="text-lg font-semibold">{value}</div>
+      <div className={`absolute left-0 top-0 h-full w-1 ${bar}`} />
     </div>
   )
 }

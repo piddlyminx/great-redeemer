@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+import asyncio
 import re
 import os
 from typing import Optional
 
 from fastapi import FastAPI, Request, Depends, Form, HTTPException, status, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 try:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware  # type: ignore
@@ -476,6 +478,115 @@ def api_attempts(limit: int = 50, db: Session = Depends(get_db)):
             "result_msg": a.result_msg,
         })
     return out
+
+
+@app.get("/api/worker_events")
+async def api_worker_events(request: Request):
+    """SSE stream of {summary, peek} updates every ~2s.
+
+    Works behind Traefik; the UI falls back to polling if SSE is unavailable.
+    """
+
+    async def event_gen():
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                # Summary counts
+                with SessionLocal() as db:
+                    users = db.scalar(select(func.count(User.id))) or 0
+                    codes = db.scalar(select(func.count(GiftCode.id))) or 0
+                    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "success")) or 0
+                    failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
+                    pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
+                def _read(name: str):
+                    try:
+                        base = STATUS_DIR or "."
+                        with open(os.path.join(base, name)) as f:
+                            return f.read().strip()
+                    except Exception:
+                        return None
+                rss_hb = _read(".rss_heartbeat")
+                worker_hb = _read(".worker_heartbeat")
+                try:
+                    import json as _json
+                    with open(os.path.join(STATUS_DIR or ".", ".worker_status")) as f:
+                        worker_status = _json.loads(f.read())
+                except Exception:
+                    worker_status = None
+
+                # Build peek (recent, current, upcoming)
+                with SessionLocal() as db:
+                    limit = 5
+                    q = (
+                        db.query(RedemptionAttempt, Redemption, User, GiftCode)
+                        .join(Redemption, RedemptionAttempt.redemption_id == Redemption.id)
+                        .join(User, Redemption.user_id == User.id)
+                        .join(GiftCode, Redemption.gift_code_id == GiftCode.id)
+                        .order_by(RedemptionAttempt.created_at.desc())
+                        .limit(max(1, min(10, limit)))
+                    )
+                    recents = []
+                    for att, red, user, code in q.all():
+                        recents.append({
+                            "id": att.id,
+                            "ts": att.created_at.isoformat() if att.created_at else None,
+                            "fid": user.fid,
+                            "name": user.name,
+                            "code": code.code,
+                            "err": att.err_code,
+                            "msg": att.result_msg[:120] if att.result_msg else None,
+                        })
+                    # current from status file
+                    try:
+                        import json as _json
+                        with open(os.path.join(STATUS_DIR or ".", ".worker_status")) as f:
+                            cur = _json.loads(f.read()).get("current")
+                    except Exception:
+                        cur = None
+                    if cur:
+                        try:
+                            with SessionLocal() as db2:
+                                u = None
+                                if cur.get("user_id"):
+                                    u = db2.get(User, int(cur["user_id"]))
+                                elif cur.get("fid"):
+                                    u = db2.scalar(select(User).where(User.fid == int(cur["fid"])) )
+                                if u:
+                                    cur["name"] = u.name
+                        except Exception:
+                            pass
+                    # upcoming
+                    from datetime import timedelta as _td
+                    cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.utcnow()
+                    active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
+                    active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
+                    upcoming = []
+                    for code in active_codes:
+                        if len(upcoming) >= limit:
+                            break
+                        for user in active_users:
+                            if len(upcoming) >= limit:
+                                break
+                            red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
+                            if red and red.status == "success":
+                                continue
+                            if red and red.last_attempt_at and red.last_attempt_at > cutoff:
+                                continue
+                            upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
+
+                payload = {
+                    "summary": {"users": users, "codes": codes, "success": success, "failed": failed, "pending": pending, "rss_hb": rss_hb, "worker_hb": worker_hb, "worker_status": worker_status},
+                    "peek": {"current": cur, "recent": recents, "upcoming": upcoming[:limit]},
+                }
+                import json as _json
+                yield f"data: {_json.dumps(payload)}\n\n"
+            except Exception:
+                yield "data: {}\n\n"
+            await asyncio.sleep(2)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
 
 # ---------------- SPA fallback (register last) ----------------
 def _is_spa_path_final(path: str) -> bool:
