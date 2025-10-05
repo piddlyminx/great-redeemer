@@ -57,7 +57,8 @@ uv run pytest tests/test_api.py  # single file
 
 ### Key Concepts
 - **Redemption workflow**: Worker fetches captcha → sends to OpenRouter vision model → submits code with solution → records result
-- **Throttling**: `REDEEM_MAX_ATTEMPTS_PER_CYCLE` (default 2), `REDEEM_DELAY_S` (default 2s), `REDEEM_MIN_RETRY_MINUTES` (default 15)
+- **Throttling**: `REDEEM_MAX_ATTEMPTS_PER_CYCLE` (default 2), `REDEEM_DELAY_S` (default 2s), `REDEEM_MIN_RETRY_MINUTES` (default 15), `REDEEM_MAX_ATTEMPTS_PER_PAIR` (default 3)
+- **Worker Queue**: A thread-safe in-memory queue maintains upcoming (user, code) pairs; the API/SSE previews come from this real queue when available.
 - **Auth**: Cloudflare Access JWT verification; inactive accounts auto-provisioned as managers; admins bootstrapped via env vars
 - **SPA serving**: [app.py](wos_redeem/app.py) injects `<base href>` dynamically for Traefik prefix routing
 - **Heartbeats**: Workers write `.rss_heartbeat`, `.worker_heartbeat`, `.worker_status` JSON to `STATUS_DIR` for monitoring
@@ -91,6 +92,7 @@ uv run pytest tests/test_api.py  # single file
 - `REDEEM_MAX_ATTEMPTS_PER_CYCLE`: Max redemption attempts per worker loop (default: `2`)
 - `REDEEM_DELAY_S`: Delay between attempts in seconds (default: `2`)
 - `REDEEM_MIN_RETRY_MINUTES`: Backoff period before retrying (default: `15`)
+- `REDEEM_MAX_ATTEMPTS_PER_PAIR`: Max attempts allowed per (user, code) pair before it is considered failed (default: `3`)
 - `REDEEM_POLL_SECONDS`: Worker poll interval (default: `20`)
 - `DISABLE_AUTH_ALL`: Disable all auth checks for local dev (default: `0`)
 - `CLOUDFLARE_TEAM_DOMAIN`, `CLOUDFLARE_AUD`: For Cloudflare Access JWT verification

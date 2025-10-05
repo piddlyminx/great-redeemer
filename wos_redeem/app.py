@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from .db import SessionLocal, Alliance, User, GiftCode, Redemption, RedemptionAttempt, WebAccount, WebRole
 from .auth import ensure_bootstrap_admin, verify_password, hash_password
 from .cf_access import get_verifier
-from .tasks import start_background_threads, MIN_RETRY_MINUTES
+from .tasks import start_background_threads, MIN_RETRY_MINUTES, MAX_ATTEMPTS_PER_PAIR
 
 
 def get_db():
@@ -208,7 +208,40 @@ def api_summary(db: Session = Depends(get_db)):
     codes = db.scalar(select(func.count(GiftCode.id))) or 0
     success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "success")) or 0
     failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
-    pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
+    # Prefer worker-computed eligible backlog if available; fallback to SQL estimate
+    fallback_pending = None
+    try:
+        from sqlalchemy import exists
+        from .tasks import MAX_ATTEMPTS_PER_PAIR, MIN_RETRY_MINUTES as _MIN
+        cutoff = datetime.utcnow()
+        if _MIN:
+            from datetime import timedelta as _td
+            cutoff = datetime.utcnow() - _td(minutes=_MIN)
+        s = (
+            select(func.count())
+            .select_from(User, GiftCode)
+            .where(User.active == True, GiftCode.active == True)
+            .where(~exists(select(Redemption.id).where(
+                Redemption.user_id == User.id,
+                Redemption.gift_code_id == GiftCode.id,
+                Redemption.status == "success",
+            )))
+            .where(~exists(select(Redemption.id).where(
+                Redemption.user_id == User.id,
+                Redemption.gift_code_id == GiftCode.id,
+                Redemption.attempt_count >= MAX_ATTEMPTS_PER_PAIR,
+            )))
+            .where(~exists(select(Redemption.id).where(
+                Redemption.user_id == User.id,
+                Redemption.gift_code_id == GiftCode.id,
+                Redemption.last_attempt_at.is_not(None),
+                Redemption.last_attempt_at > cutoff,
+            )))
+        )
+        fallback_pending = int(db.scalar(s) or 0)
+    except Exception:
+        # Last resort: traditional pending redemptions
+        fallback_pending = int(db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0)
     def read_file(p):
         try:
             base = STATUS_DIR or "."
@@ -226,6 +259,7 @@ def api_summary(db: Session = Depends(get_db)):
             worker_status = json.loads(f.read())
     except Exception:
         worker_status = None
+    pending = worker_status.get("eligible") if isinstance(worker_status, dict) and worker_status.get("eligible") is not None else fallback_pending
     return {
         "users": users,
         "codes": codes,
@@ -315,15 +349,18 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
     - recent: last few attempts with fid/code/status
     - upcoming: naive preview of next user+code pairs based on current DB state
     """
-    # current from status file
+    # current and queue preview from status file
     import json as _json
     current = None
+    queue_preview = []
     try:
         with open(".worker_status") as f:
             w = _json.loads(f.read())
             current = w.get("current")
+            queue_preview = w.get("queue") or []
     except Exception:
         current = None
+        queue_preview = []
     # Enrich current with user name if possible
     try:
         if current and current.get("user_id"):
@@ -358,28 +395,38 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
             "msg": att.result_msg[:120] if att.result_msg else None,
         })
 
-    # build a tiny queue preview
+    # Build a tiny queue preview; prefer real worker queue if available
     upcoming = []
-    cutoff = datetime.utcnow()
-    if MIN_RETRY_MINUTES:
-        from datetime import timedelta as _td
-        cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES)
-
-    active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
-    active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
-
-    for code in active_codes:
-        if len(upcoming) >= limit:
-            break
-        for user in active_users:
+    if queue_preview:
+        for q in queue_preview[:limit]:
+            upcoming.append({
+                "fid": q.get("fid"),
+                "user_id": q.get("user_id"),
+                "name": q.get("name"),
+                "code": q.get("code"),
+                "gift_code_id": q.get("gift_code_id"),
+            })
+    else:
+        cutoff = datetime.utcnow()
+        if MIN_RETRY_MINUTES:
+            from datetime import timedelta as _td
+            cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES)
+        active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
+        active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
+        for code in active_codes:
             if len(upcoming) >= limit:
                 break
-            red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-            if red and red.status == "success":
-                continue
-            if red and red.last_attempt_at and red.last_attempt_at > cutoff:
-                continue
-            upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
+            for user in active_users:
+                if len(upcoming) >= limit:
+                    break
+                red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
+                if red and red.status == "success":
+                    continue
+                if red and red.attempt_count is not None and red.attempt_count >= MAX_ATTEMPTS_PER_PAIR:
+                    continue
+                if red and red.last_attempt_at and red.last_attempt_at > cutoff:
+                    continue
+                upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
 
     return {"current": current, "recent": recents, "upcoming": upcoming[:limit]}
 
@@ -498,7 +545,42 @@ async def api_worker_events(request: Request):
                     codes = db.scalar(select(func.count(GiftCode.id))) or 0
                     success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "success")) or 0
                     failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
-                    pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
+                    # Prefer worker eligible backlog from status file; fallback to SQL estimate
+                    try:
+                        pending = int((worker_status or {}).get("eligible")) if isinstance(worker_status, dict) and (worker_status or {}).get("eligible") is not None else None
+                    except Exception:
+                        pending = None
+                    if pending is None:
+                        try:
+                            from sqlalchemy import exists
+                            from .tasks import MAX_ATTEMPTS_PER_PAIR
+                            from datetime import timedelta as _td
+                            cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.utcnow()
+                            s = (
+                                select(func.count())
+                                .select_from(User, GiftCode)
+                                .where(User.active == True, GiftCode.active == True)
+                                .where(~exists(select(Redemption.id).where(
+                                    Redemption.user_id == User.id,
+                                    Redemption.gift_code_id == GiftCode.id,
+                                    Redemption.status == "success",
+                                )))
+                                .where(~exists(select(Redemption.id).where(
+                                    Redemption.user_id == User.id,
+                                    Redemption.gift_code_id == GiftCode.id,
+                                    Redemption.attempt_count >= MAX_ATTEMPTS_PER_PAIR,
+                                )))
+                                .where(~exists(select(Redemption.id).where(
+                                    Redemption.user_id == User.id,
+                                    Redemption.gift_code_id == GiftCode.id,
+                                    Redemption.last_attempt_at.is_not(None),
+                                    Redemption.last_attempt_at > cutoff,
+                                )))
+                            )
+                            with SessionLocal() as db2:
+                                pending = int(db2.scalar(s) or 0)
+                        except Exception:
+                            pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
                 def _read(name: str):
                     try:
                         base = STATUS_DIR or "."
@@ -537,13 +619,17 @@ async def api_worker_events(request: Request):
                             "err": att.err_code,
                             "msg": att.result_msg[:120] if att.result_msg else None,
                         })
-                    # current from status file
+                    # current + queue from status file
+                    queue_preview = []
                     try:
                         import json as _json
                         with open(os.path.join(STATUS_DIR or ".", ".worker_status")) as f:
-                            cur = _json.loads(f.read()).get("current")
+                            _stat = _json.loads(f.read())
+                            cur = _stat.get("current")
+                            queue_preview = _stat.get("queue") or []
                     except Exception:
                         cur = None
+                        queue_preview = []
                     if cur:
                         try:
                             with SessionLocal() as db2:
@@ -556,24 +642,36 @@ async def api_worker_events(request: Request):
                                     cur["name"] = u.name
                         except Exception:
                             pass
-                    # upcoming
-                    from datetime import timedelta as _td
-                    cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.utcnow()
-                    active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
-                    active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
+                    # upcoming: prefer queue snapshot; fallback to DB eligibility
                     upcoming = []
-                    for code in active_codes:
-                        if len(upcoming) >= limit:
-                            break
-                        for user in active_users:
+                    if queue_preview:
+                        for q in queue_preview[:limit]:
+                            upcoming.append({
+                                "fid": q.get("fid"),
+                                "user_id": q.get("user_id"),
+                                "name": q.get("name"),
+                                "code": q.get("code"),
+                                "gift_code_id": q.get("gift_code_id"),
+                            })
+                    else:
+                        from datetime import timedelta as _td
+                        cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.utcnow()
+                        active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
+                        active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
+                        for code in active_codes:
                             if len(upcoming) >= limit:
                                 break
-                            red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-                            if red and red.status == "success":
-                                continue
-                            if red and red.last_attempt_at and red.last_attempt_at > cutoff:
-                                continue
-                            upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
+                            for user in active_users:
+                                if len(upcoming) >= limit:
+                                    break
+                                red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
+                                if red and red.status == "success":
+                                    continue
+                                if red and red.attempt_count is not None and red.attempt_count >= MAX_ATTEMPTS_PER_PAIR:
+                                    continue
+                                if red and red.last_attempt_at and red.last_attempt_at > cutoff:
+                                    continue
+                                upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
 
                 payload = {
                     "summary": {"users": users, "codes": codes, "success": success, "failed": failed, "pending": pending, "rss_hb": rss_hb, "worker_hb": worker_hb, "worker_status": worker_status},
