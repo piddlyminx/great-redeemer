@@ -73,6 +73,8 @@ services:
       db:
         condition: service_healthy
     command: ["sh", "-lc", "uv run alembic upgrade head && uv run --frozen python -m wos_redeem.worker"]
+    env_file:
+      - .env.local
     environment:
       DATABASE_URL: postgresql+psycopg://wos:wos@db:5432/wos
       WOS_SECRET: ${WOS_SECRET:-tB87#kPtkxqOS2}
