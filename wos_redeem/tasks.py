@@ -9,7 +9,6 @@ from typing import Optional, List
 import os
 import json
 
-import feedparser  # type: ignore
 from sqlalchemy import select, func, exists
 from sqlalchemy.orm import Session
 
@@ -20,7 +19,7 @@ from .utils import save_failure_captcha
 from .queueing import worker_state, QueueItem
 
 
-RSS_URL = "https://wosgiftcodes.com/rss.php"
+# Legacy constant retained earlier for an RSS feed; no longer used.
 
 # Throttling: number of redemption attempts per worker cycle (default 2)
 MAX_ATTEMPTS_PER_CYCLE = int(os.getenv("REDEEM_MAX_ATTEMPTS_PER_CYCLE", "2"))
@@ -31,6 +30,7 @@ ATTEMPT_DELAY_S = float(os.getenv("REDEEM_DELAY_S", "2"))
 # Skip redemptions attempted within this many minutes
 MIN_RETRY_MINUTES = int(os.getenv("REDEEM_MIN_RETRY_MINUTES", "15"))
 REDEEM_POLL_SECONDS = int(os.getenv("REDEEM_POLL_SECONDS", "20"))
+CAPTCHA_RETRIES_PER_ROUND = int(os.getenv("REDEEM_CAPTCHA_RETRIES_PER_ROUND", "6"))
 
 # Where to write small heartbeat/status files so the API can read them.
 # Defaults to current working directory; set to a shared volume path like "/state" in compose.
@@ -48,24 +48,64 @@ def extract_codes(text: str) -> list[str]:
     return re.findall(r"\b[A-Z0-9]{6,16}\b", text.upper())
 
 
-def rss_scraper_loop(interval_seconds: int = 300) -> None:
+def _scrape_wosrewards_active() -> list[str]:
+    """Scrape active codes from https://www.wosrewards.com/.
+
+    Strategy:
+    - Active cards appear before the first "EXPIRED" marker.
+    - Codes are inside <h5 class="font-bold mb-2 ..."> elements; expired ones add
+      the class "opacity-60". We only read <h5> elements in the active section
+      and ignore any with non-alphanumeric text.
+    """
+    import requests
+
+    url = "https://www.wosrewards.com/"
+    headers = {"User-Agent": os.getenv("RSS_USER_AGENT", "wos-redeemer/1.0 (+html)")}
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    html = r.text
+
+    # Consider only the portion before the first "EXPIRED" marker.
+    cut = html.find("EXPIRED")
+    active_html = html if cut < 0 else html[:cut]
+
+    # Extract codes from <h5> elements.
+    # Keep text that is strictly alphanumeric (case-sensitive) and 4..24 chars.
+    # This avoids unrelated words from scripts like DOCUMENTELEMENT, JSDELIVR, etc.
+    h5_texts = re.findall(r"<h5[^>]*>(.*?)</h5>", active_html, flags=re.IGNORECASE | re.DOTALL)
+    cleaned: list[str] = []
+    for t in h5_texts:
+        # Drop any nested tags and trim
+        t = re.sub(r"<[^>]+>", "", t).strip()
+        if not t:
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9]{4,24}", t):
+            continue
+        cleaned.append(t)
+    # De-duplicate while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in cleaned:
+        if c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+    return out
+
+
+def scrape_loop(interval_seconds: int = 300) -> None:
     while True:
         started = datetime.utcnow()
         try:
-            feed = feedparser.parse(RSS_URL)
-            for entry in feed.entries:
-                title = entry.get("title", "") or ""
-                summary = entry.get("summary", "") or ""
-                link = entry.get("link", "") or ""
-                found = set(extract_codes(title + "\n" + summary))
-                if not found:
-                    continue
+            # Only ingest active codes from wosrewards.com
+            active_codes = _scrape_wosrewards_active()
+            if active_codes:
                 with SessionLocal() as db:
-                    for code in found:
+                    for code in active_codes:
                         exists = db.scalar(select(GiftCode).where(GiftCode.code == code))
                         if exists:
                             continue
-                        gc = GiftCode(code=code, title=title[:255] or None, description=summary or None, source_url=link or None)
+                        gc = GiftCode(code=code, title=None, description=None, source_url="https://www.wosrewards.com/")
                         db.add(gc)
                         db.commit()
         except Exception:
@@ -125,7 +165,23 @@ def _eligible_pairs(db: Session, limit_codes: int = 20, limit_users: int = 200) 
             red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
             if red and red.status == RedemptionStatus.success.value:
                 continue
-            if red and red.attempt_count >= MAX_ATTEMPTS_PER_PAIR:
+            # Allow extra retries for CAPTCHA errors: if we've ever seen a
+            # "CAPTCHA CHECK ERROR" attempt for this redemption, double the cap
+            # for this (user, code) pair. This approximates the requested "0.5
+            # per-try" accounting without changing the DB integer schema.
+            allowed_attempts = MAX_ATTEMPTS_PER_PAIR
+            if red:
+                cap_err_count = db.scalar(
+                    select(func.count())
+                    .select_from(RedemptionAttempt)
+                    .where(
+                        RedemptionAttempt.redemption_id == red.id,
+                        RedemptionAttempt.result_msg.contains("CAPTCHA CHECK ERROR"),
+                    )
+                ) or 0
+                if cap_err_count > 0:
+                    allowed_attempts = MAX_ATTEMPTS_PER_PAIR * 2
+            if red and red.attempt_count >= allowed_attempts:
                 continue
             if red and red.last_attempt_at and red.last_attempt_at > cutoff:
                 continue
@@ -189,7 +245,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                 # Drain queue for this cycle
                 stop_cycle = False
                 while True:
-                    if attempts_made >= max(1, MAX_ATTEMPTS_PER_CYCLE):
+                    if attempts_made >= max(1, MAX_ATTEMPTS_PER_CYCLE) or stop_cycle:
                         break
                     item = worker_state.pop()
                     if item is None:
@@ -207,8 +263,24 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         db.commit()
                         db.refresh(redemption)
 
-                    # Skip if we've already tried max_attempts_per_pair
-                    if redemption.attempt_count >= max_attempts_per_pair:
+                    # Skip if we've already tried the allowed attempts for this pair.
+                    # If we've seen a CAPTCHA error for this redemption, allow up to
+                    # 2× the usual cap to give the solver more chances.
+                    allowed_attempts = max_attempts_per_pair
+                    try:
+                        cap_err_count = db.scalar(
+                            select(func.count())
+                            .select_from(RedemptionAttempt)
+                            .where(
+                                RedemptionAttempt.redemption_id == redemption.id,
+                                RedemptionAttempt.result_msg.contains("CAPTCHA CHECK ERROR"),
+                            )
+                        ) or 0
+                        if cap_err_count > 0:
+                            allowed_attempts = max_attempts_per_pair * 2
+                    except Exception:
+                        pass
+                    if redemption.attempt_count >= allowed_attempts:
                         if redemption.status == RedemptionStatus.pending.value:
                             redemption.status = RedemptionStatus.failed.value
                             db.commit()
@@ -262,114 +334,167 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         # move on to next user/code
                         continue
 
-                    # Always fetch captcha; backend requires it as of 2025-10-04.
-                    try:
-                        cap = api.call_captcha(user.fid)
-                        data_url = cap.get("data", {}).get("img")
-                        if not isinstance(data_url, str):
-                            raise RuntimeError("captcha response missing image data")
-                        print(f"[worker] fid={user.fid} /captcha ok", flush=True)
-                    except Exception as e:
-                        att = RedemptionAttempt(
-                            redemption_id=redemption.id,
-                            attempt_no=redemption.attempt_count + 1,
-                            result_msg=f"captcha request error: {e}",
-                        )
-                        db.add(att)
-                        redemption.attempt_count += 1
-                        redemption.last_attempt_at = datetime.utcnow()
-                        db.commit()
-                        print(f"[worker] fid={user.fid} /captcha error: {e}", flush=True)
-                        errors += 1
-                        continue
-
-                    try:
-                        captcha = solve_captcha_via_openrouter(data_url, api_key)
-                        print(f"[worker] fid={user.fid} openrouter captcha={captcha}", flush=True)
-                    except CaptchaSolverError as e:
-                        print(f"[worker] fid={user.fid} openrouter error: {e}", flush=True)
-                        # Persist the CAPTCHA image with the exact attempted guess
+                    # Inner loop: retry CAPTCHA inline up to N times for CAPTCHA CHECK ERROR
+                    tries_in_round = 0
+                    while True:
+                        # Check allowed attempts (grace to 2x if we've seen CAPTCHA errors before)
+                        allowed_attempts = max_attempts_per_pair
                         try:
-                            out_path = save_failure_captcha(
-                                data_url,
-                                fid=user.fid,
-                                guess=(e.guess or "none"),
-                                reason="openrouter_error",
-                            )
-                            print(f"[worker] saved failed captcha to: {out_path}", flush=True)
+                            cap_err_count = db.scalar(
+                                select(func.count())
+                                .select_from(RedemptionAttempt)
+                                .where(
+                                    RedemptionAttempt.redemption_id == redemption.id,
+                                    RedemptionAttempt.result_msg.contains("CAPTCHA CHECK ERROR"),
+                                )
+                            ) or 0
+                            if cap_err_count > 0:
+                                allowed_attempts = max_attempts_per_pair * 2
                         except Exception:
                             pass
-                        att = RedemptionAttempt(
-                            redemption_id=redemption.id,
-                            attempt_no=redemption.attempt_count + 1,
-                            result_msg=f"solver error: {e}",
-                        )
-                        db.add(att)
-                        redemption.attempt_count += 1
-                        redemption.last_attempt_at = datetime.utcnow()
-                        db.commit()
-                        errors += 1
-                        continue
-                    except Exception as e:
-                        # Non-parsing errors (e.g., HTTP) — do not save image per requirements
-                        print(f"[worker] fid={user.fid} openrouter HTTP/unknown error: {e}", flush=True)
-                        att = RedemptionAttempt(
-                            redemption_id=redemption.id,
-                            attempt_no=redemption.attempt_count + 1,
-                            result_msg=f"solver error: {e}",
-                        )
-                        db.add(att)
-                        redemption.attempt_count += 1
-                        redemption.last_attempt_at = datetime.utcnow()
-                        db.commit()
-                        errors += 1
-                        continue
+                        if redemption.attempt_count >= allowed_attempts:
+                            break
 
-                    # redeem with captcha
-                    resp = api.call_gift_code(user.fid, code.code, captcha)
-                    status_code = resp.get("code")
-                    msg = resp.get("msg")
-                    err_code = resp.get("err_code")
-                    print(f"[worker] fid={user.fid} /gift_code code={status_code} msg={msg} err={err_code}", flush=True)
-                    att = RedemptionAttempt(
-                        redemption_id=redemption.id,
-                        attempt_no=redemption.attempt_count + 1,
-                        captcha=captcha,
-                        result_msg=json.dumps(resp)[:1000] if isinstance(resp, dict) else str(resp),  # type: ignore[name-defined]
-                        err_code=int(err_code) if isinstance(err_code, int) else None,
-                    )
-                    db.add(att)
-                    redemption.attempt_count += 1
-                    redemption.captcha = captcha
-                    redemption.result_msg = msg
-                    msg_norm = (str(msg) if isinstance(msg, str) else "").strip().rstrip(".").upper()
-                    if msg_norm in {"SUCCESS"} or status_code == 0:
-                        redemption.status = RedemptionStatus.success.value
-                        successes += 1
-                    elif msg_norm in {"RECEIVED", "SAME TYPE EXCHANGE", "ALREADY RECEIVED"}:
-                        redemption.status = RedemptionStatus.success.value
-                        successes += 1
-                    elif msg_norm == "NOT LOGIN":
+                        # Always fetch captcha; backend requires it as of 2025-10-04.
                         try:
-                            api.call_player(user.fid)
-                            print(f"[worker] fid={user.fid} NOT LOGIN -> refreshed /player", flush=True)
+                            cap = api.call_captcha(user.fid)
+                            data_url = cap.get("data", {}).get("img")
+                            if not isinstance(data_url, str):
+                                raise RuntimeError("captcha response missing image data")
+                            print(f"[worker] fid={user.fid} /captcha ok", flush=True)
                         except Exception as e:
-                            print(f"[worker] fid={user.fid} NOT LOGIN -> /player failed: {e}", flush=True)
+                            att = RedemptionAttempt(
+                                redemption_id=redemption.id,
+                                attempt_no=redemption.attempt_count + 1,
+                                result_msg=f"captcha request error: {e}",
+                            )
+                            db.add(att)
+                            redemption.attempt_count += 1
+                            redemption.last_attempt_at = datetime.utcnow()
+                            db.commit()
+                            print(f"[worker] fid={user.fid} /captcha error: {e}", flush=True)
                             errors += 1
-                    elif msg_norm == "CAPTCHA CHECK ERROR":
-                        print(f"[worker] fid={user.fid} captcha wrong; will retry later", flush=True)
-                        # Save the image with the incorrect guess
-                        try:
-                            out_path = save_failure_captcha(data_url, fid=user.fid, guess=captcha, reason="captcha_check_error")
-                            print(f"[worker] saved failed captcha to: {out_path}", flush=True)
-                        except Exception:
-                            pass
-                        errors += 1
-                    redemption.err_code = err_code if isinstance(err_code, int) else None
-                    redemption.last_attempt_at = datetime.utcnow()
-                    db.commit()
+                            break
 
-                    attempts_made += 1
+                        try:
+                            captcha = solve_captcha_via_openrouter(data_url, api_key)
+                            print(f"[worker] fid={user.fid} openrouter captcha={captcha}", flush=True)
+                        except CaptchaSolverError as e:
+                            print(f"[worker] fid={user.fid} openrouter error: {e}", flush=True)
+                            # Persist the CAPTCHA image with the exact attempted guess
+                            try:
+                                out_path = save_failure_captcha(
+                                    data_url,
+                                    fid=user.fid,
+                                    guess=(e.guess or "none"),
+                                    reason="openrouter_error",
+                                )
+                                print(f"[worker] saved failed captcha to: {out_path}", flush=True)
+                            except Exception:
+                                pass
+                            att = RedemptionAttempt(
+                                redemption_id=redemption.id,
+                                attempt_no=redemption.attempt_count + 1,
+                                result_msg=f"solver error: {e}",
+                            )
+                            db.add(att)
+                            redemption.attempt_count += 1
+                            redemption.last_attempt_at = datetime.utcnow()
+                            db.commit()
+                            errors += 1
+                            break
+                        except Exception as e:
+                            # Non-parsing errors (e.g., HTTP) — do not save image per requirements
+                            print(f"[worker] fid={user.fid} openrouter HTTP/unknown error: {e}", flush=True)
+                            att = RedemptionAttempt(
+                                redemption_id=redemption.id,
+                                attempt_no=redemption.attempt_count + 1,
+                                result_msg=f"solver error: {e}",
+                            )
+                            db.add(att)
+                            redemption.attempt_count += 1
+                            redemption.last_attempt_at = datetime.utcnow()
+                            db.commit()
+                            errors += 1
+                            break
+
+                        # redeem with captcha
+                        resp = api.call_gift_code(user.fid, code.code, captcha)
+                        status_code = resp.get("code")
+                        msg = resp.get("msg")
+                        err_code = resp.get("err_code")
+                        print(f"[worker] fid={user.fid} /gift_code code={status_code} msg={msg} err={err_code}", flush=True)
+                        att = RedemptionAttempt(
+                            redemption_id=redemption.id,
+                            attempt_no=redemption.attempt_count + 1,
+                            captcha=captcha,
+                            result_msg=json.dumps(resp)[:1000] if isinstance(resp, dict) else str(resp),  # type: ignore[name-defined]
+                            err_code=int(err_code) if isinstance(err_code, int) else None,
+                        )
+                        db.add(att)
+                        redemption.attempt_count += 1
+                        redemption.captcha = captcha
+                        redemption.result_msg = msg
+                        msg_norm = (str(msg) if isinstance(msg, str) else "").strip().rstrip(".").upper()
+                        if msg_norm in {"SUCCESS"} or status_code == 0:
+                            redemption.status = RedemptionStatus.success.value
+                            successes += 1
+                        elif msg_norm in {"RECEIVED", "SAME TYPE EXCHANGE", "ALREADY RECEIVED"}:
+                            redemption.status = RedemptionStatus.success.value
+                            successes += 1
+                        elif msg_norm in {"CDK NOT FOUND", "USED", "TIME ERROR"}:
+                            # Code is invalid/consumed/expired globally. Mark code inactive so
+                            # it won't be queued for others, and clear + refill the worker queue
+                            # to drop any pending work for this code.
+                            try:
+                                code.active = False
+                                db.commit()
+                                worker_state.clear()
+                                _refill_queue(db)
+                                print(f"[worker] code={code.code} marked inactive due to '{msg_norm}'. queue reset+refill", flush=True)
+                            except Exception:
+                                pass
+                            # Mark this redemption as failed since the code cannot be redeemed.
+                            if redemption.status != RedemptionStatus.success.value:
+                                redemption.status = RedemptionStatus.failed.value
+                            errors += 1
+                            stop_cycle = True
+                        elif msg_norm == "NOT LOGIN":
+                            try:
+                                api.call_player(user.fid)
+                                print(f"[worker] fid={user.fid} NOT LOGIN -> refreshed /player", flush=True)
+                            except Exception as e:
+                                print(f"[worker] fid={user.fid} NOT LOGIN -> /player failed: {e}", flush=True)
+                                errors += 1
+                        elif msg_norm == "CAPTCHA CHECK ERROR":
+                            print(f"[worker] fid={user.fid} captcha wrong; retrying (round {tries_in_round+1}/{CAPTCHA_RETRIES_PER_ROUND})", flush=True)
+                            # Save the image with the incorrect guess
+                            try:
+                                out_path = save_failure_captcha(data_url, fid=user.fid, guess=captcha, reason="captcha_check_error")
+                                print(f"[worker] saved failed captcha to: {out_path}", flush=True)
+                            except Exception:
+                                pass
+                            errors += 1
+                            tries_in_round += 1
+                            # Respect per-round limit; continue if we still have room
+                            redemption.err_code = err_code if isinstance(err_code, int) else None
+                            redemption.last_attempt_at = datetime.utcnow()
+                            db.commit()
+                            attempts_made += 1
+                            if tries_in_round < CAPTCHA_RETRIES_PER_ROUND and redemption.attempt_count < allowed_attempts:
+                                # tiny pause to avoid hammering
+                                if ATTEMPT_DELAY_S > 0:
+                                    delay = max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3))
+                                    time.sleep(delay)
+                                continue
+                        # Persist outcome and exit retry loop
+                        redemption.err_code = err_code if isinstance(err_code, int) else None
+                        redemption.last_attempt_at = datetime.utcnow()
+                        db.commit()
+                        attempts_made += 1
+                        break
+
+                    # Inter-item delay
                     if ATTEMPT_DELAY_S > 0:
                         delay = max(0.0, ATTEMPT_DELAY_S + random.uniform(-0.5, 0.5))
                         time.sleep(delay)
@@ -407,7 +532,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
 
 
 def start_background_threads() -> None:
-    t1 = threading.Thread(target=rss_scraper_loop, name="rss-scraper", daemon=True)
+    t1 = threading.Thread(target=scrape_loop, name="web-scraper", daemon=True)
     t1.start()
     t2 = threading.Thread(target=redemption_worker_loop, name="redeem-worker", daemon=True)
     t2.start()
