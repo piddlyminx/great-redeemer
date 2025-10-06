@@ -127,7 +127,11 @@ def eligible_count(db: Session) -> int:
         .where(~exists(select(Redemption.id).where(
             Redemption.user_id == User.id,
             Redemption.gift_code_id == GiftCode.id,
-            Redemption.status.in_([RedemptionStatus.redeemed_new.value, RedemptionStatus.redeemed_already.value]),
+            Redemption.status.in_([
+                RedemptionStatus.redeemed_new.value,
+                RedemptionStatus.redeemed_already.value,
+                'success'
+            ]),
         )))
         .where(~exists(select(Redemption.id).where(
             Redemption.user_id == User.id,

@@ -206,7 +206,7 @@ def _require(cond: bool):
 def api_summary(db: Session = Depends(get_db)):
     users = db.scalar(select(func.count(User.id))) or 0
     codes = db.scalar(select(func.count(GiftCode.id))) or 0
-    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already"]))) or 0
+    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]))) or 0
     failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
     # Prefer worker-computed eligible backlog if available; fallback to SQL estimate
     fallback_pending = None
@@ -224,7 +224,7 @@ def api_summary(db: Session = Depends(get_db)):
             .where(~exists(select(Redemption.id).where(
                 Redemption.user_id == User.id,
                 Redemption.gift_code_id == GiftCode.id,
-                Redemption.status.in_(["redeemed_new", "redeemed_already"]),
+                Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]),
             )))
             .where(~exists(select(Redemption.id).where(
                 Redemption.user_id == User.id,
@@ -530,7 +530,7 @@ async def api_worker_events(request: Request):
                 with SessionLocal() as db:
                     users = db.scalar(select(func.count(User.id))) or 0
                     codes = db.scalar(select(func.count(GiftCode.id))) or 0
-                    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already"]))) or 0
+                    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]))) or 0
                     failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
                     # Prefer worker eligible backlog from status file; fallback to SQL estimate
                     try:
@@ -550,7 +550,7 @@ async def api_worker_events(request: Request):
                                 .where(~exists(select(Redemption.id).where(
                                     Redemption.user_id == User.id,
                                     Redemption.gift_code_id == GiftCode.id,
-                                    Redemption.status.in_(["redeemed_new", "redeemed_already"]),
+                                    Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]),
                                 )))
                                 .where(~exists(select(Redemption.id).where(
                                     Redemption.user_id == User.id,
