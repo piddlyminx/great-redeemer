@@ -34,7 +34,8 @@ Base = declarative_base()
 
 class RedemptionStatus(enum.Enum):
     pending = "pending"
-    success = "success"
+    redeemed_new = "redeemed_new"          # This attempt redeemed the code now
+    redeemed_already = "redeemed_already"  # User had already redeemed (RECEIVED/SAME TYPE EXCHANGE)
     failed = "failed"
 
 

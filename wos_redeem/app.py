@@ -206,7 +206,7 @@ def _require(cond: bool):
 def api_summary(db: Session = Depends(get_db)):
     users = db.scalar(select(func.count(User.id))) or 0
     codes = db.scalar(select(func.count(GiftCode.id))) or 0
-    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "success")) or 0
+    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already"]))) or 0
     failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
     # Prefer worker-computed eligible backlog if available; fallback to SQL estimate
     fallback_pending = None
@@ -224,7 +224,7 @@ def api_summary(db: Session = Depends(get_db)):
             .where(~exists(select(Redemption.id).where(
                 Redemption.user_id == User.id,
                 Redemption.gift_code_id == GiftCode.id,
-                Redemption.status == "success",
+                Redemption.status.in_(["redeemed_new", "redeemed_already"]),
             )))
             .where(~exists(select(Redemption.id).where(
                 Redemption.user_id == User.id,
@@ -390,14 +390,15 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
         if pair in seen_pairs:
             continue
         seen_pairs.add(pair)
+        ok = (red.status in ("redeemed_new", "redeemed_already"))
         recents.append({
             "id": att.id,
             "ts": att.created_at.isoformat() if att.created_at else None,
             "fid": user.fid,
             "name": user.name,
             "code": code.code,
-            # Treat as error only if the overall redemption isn't success
-            "err": 1 if (red.status != "success") else 0,
+            # Treat as error only if the overall redemption isn't a redeemed status
+            "err": 0 if ok else 1,
             "msg": att.result_msg[:120] if att.result_msg else None,
         })
     recents = recents[: max(1, min(10, limit))]
@@ -529,7 +530,7 @@ async def api_worker_events(request: Request):
                 with SessionLocal() as db:
                     users = db.scalar(select(func.count(User.id))) or 0
                     codes = db.scalar(select(func.count(GiftCode.id))) or 0
-                    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "success")) or 0
+                    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already"]))) or 0
                     failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
                     # Prefer worker eligible backlog from status file; fallback to SQL estimate
                     try:
@@ -549,7 +550,7 @@ async def api_worker_events(request: Request):
                                 .where(~exists(select(Redemption.id).where(
                                     Redemption.user_id == User.id,
                                     Redemption.gift_code_id == GiftCode.id,
-                                    Redemption.status == "success",
+                                    Redemption.status.in_(["redeemed_new", "redeemed_already"]),
                                 )))
                                 .where(~exists(select(Redemption.id).where(
                                     Redemption.user_id == User.id,
@@ -601,14 +602,15 @@ async def api_worker_events(request: Request):
                         if pair in seen_pairs:
                             continue
                         seen_pairs.add(pair)
+                        ok = (red.status in ("redeemed_new", "redeemed_already"))
                         recents.append({
                             "id": att.id,
                             "ts": att.created_at.isoformat() if att.created_at else None,
                             "fid": user.fid,
                             "name": user.name,
                             "code": code.code,
-                            # Show red only if the redemption is not success
-                            "err": 1 if (red.status != "success") else 0,
+                            # Show red only if the redemption is not in redeemed states
+                            "err": 0 if ok else 1,
                             "msg": att.result_msg[:120] if att.result_msg else None,
                         })
                     recents = recents[:limit]

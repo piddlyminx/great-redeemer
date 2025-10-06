@@ -19,14 +19,12 @@ from .utils import save_failure_captcha
 from .queueing import worker_state, QueueItem
 
 
-# Legacy constant retained earlier for an RSS feed; no longer used.
-
 # Throttling: number of redemption attempts per worker cycle (default 2)
 MAX_ATTEMPTS_PER_CYCLE = int(os.getenv("REDEEM_MAX_ATTEMPTS_PER_CYCLE", "2"))
 # Max tries allowed per (user, code) pair
 MAX_ATTEMPTS_PER_PAIR = int(os.getenv("REDEEM_MAX_ATTEMPTS_PER_PAIR", "3"))
 # Optional delay between completed attempts (base seconds, jittered +/- 0.5s)
-ATTEMPT_DELAY_S = float(os.getenv("REDEEM_DELAY_S", "2"))
+ATTEMPT_DELAY_S = float(os.getenv("REDEEM_DELAY_S", "4"))
 # Skip redemptions attempted within this many minutes
 MIN_RETRY_MINUTES = int(os.getenv("REDEEM_MIN_RETRY_MINUTES", "15"))
 REDEEM_POLL_SECONDS = int(os.getenv("REDEEM_POLL_SECONDS", "20"))
@@ -129,7 +127,7 @@ def eligible_count(db: Session) -> int:
         .where(~exists(select(Redemption.id).where(
             Redemption.user_id == User.id,
             Redemption.gift_code_id == GiftCode.id,
-            Redemption.status == RedemptionStatus.success.value,
+            Redemption.status.in_([RedemptionStatus.redeemed_new.value, RedemptionStatus.redeemed_already.value]),
         )))
         .where(~exists(select(Redemption.id).where(
             Redemption.user_id == User.id,
@@ -163,7 +161,7 @@ def _eligible_pairs(db: Session, limit_codes: int = 20, limit_users: int = 200) 
     for code in codes:
         for user in users:
             red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-            if red and red.status == RedemptionStatus.success.value:
+            if red and red.status in (RedemptionStatus.redeemed_new.value, RedemptionStatus.redeemed_already.value):
                 continue
             # Allow extra retries for CAPTCHA errors: if we've ever seen a
             # "CAPTCHA CHECK ERROR" attempt for this redemption, double the cap
@@ -255,7 +253,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                     if not user or not code or not user.active or not code.active:
                         continue
                     redemption = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-                    if redemption and redemption.status == RedemptionStatus.success.value:
+                    if redemption and redemption.status in (RedemptionStatus.redeemed_new.value, RedemptionStatus.redeemed_already.value):
                         continue
                     if not redemption:
                         redemption = Redemption(user_id=user.id, gift_code_id=code.id)
@@ -437,10 +435,10 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         redemption.result_msg = msg
                         msg_norm = (str(msg) if isinstance(msg, str) else "").strip().rstrip(".").upper()
                         if msg_norm in {"SUCCESS"} or status_code == 0:
-                            redemption.status = RedemptionStatus.success.value
+                            redemption.status = RedemptionStatus.redeemed_new.value
                             successes += 1
                         elif msg_norm in {"RECEIVED", "SAME TYPE EXCHANGE", "ALREADY RECEIVED"}:
-                            redemption.status = RedemptionStatus.success.value
+                            redemption.status = RedemptionStatus.redeemed_already.value
                             successes += 1
                         elif msg_norm in {"CDK NOT FOUND", "USED", "TIME ERROR"}:
                             # Code is invalid/consumed/expired globally. Mark code inactive so
@@ -455,7 +453,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                             except Exception:
                                 pass
                             # Mark this redemption as failed since the code cannot be redeemed.
-                            if redemption.status != RedemptionStatus.success.value:
+                            if redemption.status not in (RedemptionStatus.redeemed_new.value, RedemptionStatus.redeemed_already.value):
                                 redemption.status = RedemptionStatus.failed.value
                             errors += 1
                             stop_cycle = True
