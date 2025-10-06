@@ -303,12 +303,12 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                             ],
                         }
                         try:
-                            with open(".worker_status") as f:
+                            with open(_status_path(".worker_status")) as f:
                                 cur = _json.loads(f.read())
                         except Exception:
                             cur = {}
                         cur.update(status_patch)
-                        with open(".worker_status", "w") as f:
+                        with open(_status_path(".worker_status"), "w") as f:
                             f.write(_json.dumps(cur))
                     except Exception:
                         pass

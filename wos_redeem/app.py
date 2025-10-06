@@ -349,12 +349,12 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
     - recent: last few attempts with fid/code/status
     - upcoming: naive preview of next user+code pairs based on current DB state
     """
-    # current and queue preview from status file
+    # current and queue preview from status file (single source of truth)
     import json as _json
     current = None
     queue_preview = []
     try:
-        with open(".worker_status") as f:
+        with open(os.path.join(STATUS_DIR or ".", ".worker_status")) as f:
             w = _json.loads(f.read())
             current = w.get("current")
             queue_preview = w.get("queue") or []
@@ -374,59 +374,45 @@ def api_worker_peek(limit: int = 5, db: Session = Depends(get_db)):
     except Exception:
         pass
 
-    # recent attempts joined with user fid and code
+    # recent attempts joined with user fid and code, de-duplicated by (fid, code)
     recents = []
+    seen_pairs = set()
     q = (
         db.query(RedemptionAttempt, Redemption, User, GiftCode)
         .join(Redemption, RedemptionAttempt.redemption_id == Redemption.id)
         .join(User, Redemption.user_id == User.id)
         .join(GiftCode, Redemption.gift_code_id == GiftCode.id)
         .order_by(RedemptionAttempt.created_at.desc())
-        .limit(max(1, min(10, limit)))
+        .limit(50)
     )
     for att, red, user, code in q.all():
+        pair = (user.fid, code.code)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
         recents.append({
             "id": att.id,
             "ts": att.created_at.isoformat() if att.created_at else None,
             "fid": user.fid,
             "name": user.name,
             "code": code.code,
-            "err": att.err_code,
+            # Treat as error only if the overall redemption isn't success
+            "err": 1 if (red.status != "success") else 0,
             "msg": att.result_msg[:120] if att.result_msg else None,
         })
+    recents = recents[: max(1, min(10, limit))]
 
-    # Build a tiny queue preview; prefer real worker queue if available
+    # Build a tiny queue preview ONLY from the worker queue snapshot
+    # Do not issue DB lookups here; the worker is the single source of truth.
     upcoming = []
-    if queue_preview:
-        for q in queue_preview[:limit]:
-            upcoming.append({
-                "fid": q.get("fid"),
-                "user_id": q.get("user_id"),
-                "name": q.get("name"),
-                "code": q.get("code"),
-                "gift_code_id": q.get("gift_code_id"),
-            })
-    else:
-        cutoff = datetime.utcnow()
-        if MIN_RETRY_MINUTES:
-            from datetime import timedelta as _td
-            cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES)
-        active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
-        active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
-        for code in active_codes:
-            if len(upcoming) >= limit:
-                break
-            for user in active_users:
-                if len(upcoming) >= limit:
-                    break
-                red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-                if red and red.status == "success":
-                    continue
-                if red and red.attempt_count is not None and red.attempt_count >= MAX_ATTEMPTS_PER_PAIR:
-                    continue
-                if red and red.last_attempt_at and red.last_attempt_at > cutoff:
-                    continue
-                upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
+    for q in queue_preview[:limit]:
+        upcoming.append({
+            "fid": q.get("fid"),
+            "user_id": q.get("user_id"),
+            "name": q.get("name"),
+            "code": q.get("code"),
+            "gift_code_id": q.get("gift_code_id"),
+        })
 
     return {"current": current, "recent": recents, "upcoming": upcoming[:limit]}
 
@@ -606,19 +592,26 @@ async def api_worker_events(request: Request):
                         .join(User, Redemption.user_id == User.id)
                         .join(GiftCode, Redemption.gift_code_id == GiftCode.id)
                         .order_by(RedemptionAttempt.created_at.desc())
-                        .limit(max(1, min(10, limit)))
+                        .limit(100)
                     )
                     recents = []
+                    seen_pairs = set()
                     for att, red, user, code in q.all():
+                        pair = (user.fid, code.code)
+                        if pair in seen_pairs:
+                            continue
+                        seen_pairs.add(pair)
                         recents.append({
                             "id": att.id,
                             "ts": att.created_at.isoformat() if att.created_at else None,
                             "fid": user.fid,
                             "name": user.name,
                             "code": code.code,
-                            "err": att.err_code,
+                            # Show red only if the redemption is not success
+                            "err": 1 if (red.status != "success") else 0,
                             "msg": att.result_msg[:120] if att.result_msg else None,
                         })
+                    recents = recents[:limit]
                     # current + queue from status file
                     queue_preview = []
                     try:
@@ -642,36 +635,16 @@ async def api_worker_events(request: Request):
                                     cur["name"] = u.name
                         except Exception:
                             pass
-                    # upcoming: prefer queue snapshot; fallback to DB eligibility
+                    # upcoming: single source of truth = worker queue snapshot (no DB fallback)
                     upcoming = []
-                    if queue_preview:
-                        for q in queue_preview[:limit]:
-                            upcoming.append({
-                                "fid": q.get("fid"),
-                                "user_id": q.get("user_id"),
-                                "name": q.get("name"),
-                                "code": q.get("code"),
-                                "gift_code_id": q.get("gift_code_id"),
-                            })
-                    else:
-                        from datetime import timedelta as _td
-                        cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.utcnow()
-                        active_codes = db.scalars(select(GiftCode).where(GiftCode.active == True).order_by(GiftCode.first_seen_at.asc()).limit(20)).all()
-                        active_users = db.scalars(select(User).where(User.active == True).order_by(User.id.asc()).limit(50)).all()
-                        for code in active_codes:
-                            if len(upcoming) >= limit:
-                                break
-                            for user in active_users:
-                                if len(upcoming) >= limit:
-                                    break
-                                red = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-                                if red and red.status == "success":
-                                    continue
-                                if red and red.attempt_count is not None and red.attempt_count >= MAX_ATTEMPTS_PER_PAIR:
-                                    continue
-                                if red and red.last_attempt_at and red.last_attempt_at > cutoff:
-                                    continue
-                                upcoming.append({"fid": user.fid, "user_id": user.id, "name": user.name, "code": code.code, "gift_code_id": code.id})
+                    for q in queue_preview[:limit]:
+                        upcoming.append({
+                            "fid": q.get("fid"),
+                            "user_id": q.get("user_id"),
+                            "name": q.get("name"),
+                            "code": q.get("code"),
+                            "gift_code_id": q.get("gift_code_id"),
+                        })
 
                 payload = {
                     "summary": {"users": users, "codes": codes, "success": success, "failed": failed, "pending": pending, "rss_hb": rss_hb, "worker_hb": worker_hb, "worker_status": worker_status},
