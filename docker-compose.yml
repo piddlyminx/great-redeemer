@@ -80,10 +80,12 @@ services:
       REDEEM_MAX_ATTEMPTS_PER_CYCLE: ${REDEEM_MAX_ATTEMPTS_PER_CYCLE:-1}
       REDEEM_DELAY_S: ${REDEEM_DELAY_S:-5}
       STATUS_DIR: /state
+      LOG_DIR: /logs
     networks:
       - internal
     volumes:
       - state:/state
+      - ./logs:/logs
 
 volumes:
   pgdata:

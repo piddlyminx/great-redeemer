@@ -8,6 +8,8 @@ import random
 from typing import Optional, List
 import os
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 
 from sqlalchemy import select, func, exists
 from sqlalchemy.orm import Session
@@ -19,25 +21,49 @@ from .utils import save_failure_captcha
 from .queueing import worker_state, QueueItem
 
 
-# Throttling: number of redemption attempts per worker cycle (default 2)
-MAX_ATTEMPTS_PER_CYCLE = int(os.getenv("REDEEM_MAX_ATTEMPTS_PER_CYCLE", "2"))
-# Max tries allowed per (user, code) pair
+# Queue watermarks and attempt limits
+REDEEM_QUEUE_MIN = int(os.getenv("REDEEM_QUEUE_MIN", "5"))
+REDEEM_QUEUE_MAX = int(os.getenv("REDEEM_QUEUE_MAX", "20"))
 MAX_ATTEMPTS_PER_PAIR = int(os.getenv("REDEEM_MAX_ATTEMPTS_PER_PAIR", "3"))
-# Optional delay between completed attempts (base seconds, jittered +/- 0.5s)
+# Timing
 ATTEMPT_DELAY_S = float(os.getenv("REDEEM_DELAY_S", "4"))
-# Skip redemptions attempted within this many minutes
 MIN_RETRY_MINUTES = int(os.getenv("REDEEM_MIN_RETRY_MINUTES", "15"))
 REDEEM_POLL_SECONDS = int(os.getenv("REDEEM_POLL_SECONDS", "20"))
-CAPTCHA_RETRIES_PER_ROUND = int(os.getenv("REDEEM_CAPTCHA_RETRIES_PER_ROUND", "6"))
+REDEEM_OUTER_RETRIES = int(os.getenv("REDEEM_OUTER_RETRIES", "2"))
+REDEEM_INNER_RETRIES = int(os.getenv("REDEEM_INNER_RETRIES", "3"))
 
 # Where to write small heartbeat/status files so the API can read them.
 # Defaults to current working directory; set to a shared volume path like "/state" in compose.
 STATUS_DIR = os.getenv("STATUS_DIR", "")
+LOG_DIR = os.getenv("LOG_DIR", "logs")
 
 
 def _status_path(name: str) -> str:
     base = STATUS_DIR or "."
     return os.path.join(base, name)
+
+
+def _log_setup() -> logging.Logger:
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+    except Exception:
+        pass
+    logger = logging.getLogger("redeemer_worker")
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        try:
+            fh = RotatingFileHandler(os.path.join(LOG_DIR, "worker.log"), maxBytes=1_000_000, backupCount=3)
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(fh)
+        except Exception:
+            # Last resort: log to stderr
+            sh = logging.StreamHandler()
+            sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(sh)
+    return logger
+
+
+LOGGER = _log_setup()
 
 
 
@@ -191,15 +217,19 @@ def _eligible_pairs(db: Session, limit_codes: int = 20, limit_users: int = 200) 
     return out
 
 
-def _refill_queue(db: Session, target_min_size: int = 50) -> int:
-    """Top up the in-memory queue with eligible pairs up to a minimum size.
+def _refill_queue(db: Session) -> int:
+    """Top up the in-memory queue when below low-water mark.
 
-    Returns the number of items added.
+    Returns the number of items added (up to REDEEM_QUEUE_MAX total).
     """
-    if len(worker_state.queue) >= target_min_size:
+    cur = len(worker_state.queue)
+    if cur >= REDEEM_QUEUE_MIN:
+        return 0
+    need = max(0, REDEEM_QUEUE_MAX - cur)
+    if need == 0:
         return 0
     pairs = _eligible_pairs(db)
-    return worker_state.add_unique(pairs)
+    return worker_state.add_unique(pairs[:need])
 
 
 def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", max_attempts_per_pair: int = None, poll_seconds: int = None) -> None:
@@ -247,7 +277,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                 # Drain queue for this cycle
                 stop_cycle = False
                 while True:
-                    if attempts_made >= max(1, MAX_ATTEMPTS_PER_CYCLE) or stop_cycle:
+                    if stop_cycle:
                         break
                     item = worker_state.pop()
                     if item is None:
@@ -470,6 +500,10 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 errors += 1
                         elif msg_norm == "CAPTCHA CHECK ERROR":
                             print(f"[worker] fid={user.fid} captcha wrong; retrying (round {tries_in_round+1}/{CAPTCHA_RETRIES_PER_ROUND})", flush=True)
+                            try:
+                                LOGGER.info(json.dumps({"event": "captcha_check_error", "fid": user.fid, "code": code.code}))
+                            except Exception:
+                                pass
                             # Save the image with the incorrect guess
                             try:
                                 out_path = save_failure_captcha(data_url, fid=user.fid, guess=captcha, reason="captcha_check_error")
@@ -489,6 +523,16 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                     delay = max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3))
                                     time.sleep(delay)
                                 continue
+                        elif msg_norm == "CAPTCHA CHECK TOO FREQUENT":
+                            try:
+                                LOGGER.info(json.dumps({"event": "captcha_too_frequent", "fid": user.fid, "code": code.code}))
+                            except Exception:
+                                pass
+                            # Back off slightly then retry inner loop
+                            if ATTEMPT_DELAY_S > 0:
+                                delay = max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3))
+                                time.sleep(delay)
+                            continue
                         # Persist outcome and exit retry loop
                         redemption.err_code = err_code if isinstance(err_code, int) else None
                         redemption.last_attempt_at = datetime.utcnow()
@@ -500,9 +544,11 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                     if ATTEMPT_DELAY_S > 0:
                         delay = max(0.0, ATTEMPT_DELAY_S + random.uniform(-0.5, 0.5))
                         time.sleep(delay)
+                    # Process only one task per loop iteration
+                    break
         except Exception:
-            pass
-
+            LOGGER.exception("unexpected_exception_in_main_loop")
+        
         # heartbeat file
         with open(_status_path(".worker_heartbeat"), "w") as f:
             f.write(datetime.utcnow().isoformat())
@@ -529,7 +575,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                 f.write(json.dumps(status))
         except Exception:
             pass
-        print(f"[worker] cycle summary: attempts={attempts_made} success={successes} errors={errors}; sleeping {poll_seconds}s", flush=True)
+        print(f"[worker] idle; sleeping {poll_seconds}s", flush=True)
         time.sleep(poll_seconds)
 
 
