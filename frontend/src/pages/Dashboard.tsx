@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../lib/base'
+import { BTN_SOFT } from '../lib/ui'
 
 export default function Dashboard() {
   const [data, setData] = useState<any>(null)
@@ -9,6 +10,7 @@ export default function Dashboard() {
   const [alliance, setAlliance] = useState<number|''>('')
   const [peek, setPeek] = useState<any>(null)
   const [codes, setCodes] = useState<any[]>([])
+  const btnClass = `${BTN_SOFT} w-full`
 
   useEffect(() => {
     fetch(`${API_BASE}/summary`).then(r => r.json()).then(setData).catch(() => setData(null))
@@ -59,54 +61,87 @@ export default function Dashboard() {
         {/* subtle lighting to draw the eye */}
         <div className="pointer-events-none absolute inset-0 opacity-50 [background:radial-gradient(800px_420px_at_80%_10%,rgba(56,189,248,0.18),transparent_60%),radial-gradient(700px_380px_at_10%_90%,rgba(167,139,250,0.16),transparent_60%)]" />
         <div className="relative grid grid-cols-1 md:grid-cols-3 gap-6 p-6 md:p-8">
-          {/* Blurb / value prop */}
-          <div className="md:col-span-2">
+          {/* Mobile-only heading before paragraph */}
+          <div className="order-0 md:hidden">
             <div className="flex items-center gap-2 text-sky-300/90 text-sm font-medium mb-2"><span className="inline-block">🎁</span><span>Automatic Gift Code Redemption</span></div>
-            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Never miss a reward again.</h1>
-            <p className="mt-2 text-base md:text-lg text-base-content/70 max-w-2xl">
-              We watch for new codes and redeem them the moment they drop. Rewards arrive in your in‑game mailbox automatically — no more chasing posts or missing limited windows.
+            <h1 className="text-3xl font-semibold tracking-tight">Never miss a reward again.</h1>
+          </div>
+          {/* Mobile-only lead paragraph placed above the form */}
+          <div className="order-1 md:hidden">
+            <p className="mt-2 text-base text-base-content/70">
+              Enrol your chief(s) into The Great Redeemer's Miraculous Manifestation  program and from this day forth each and every gift code that comes out will be redeemed automagically for you to collect from your in game system mailbox.
             </p>
-            <ul className="mt-4 text-sm md:text-base text-base-content/70 space-y-2">
-              <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span><span>Hands‑off auto‑redeem for every code</span></li>
+          </div>
+          {/* Blurb / value prop */}
+          <div className="md:col-span-2 order-3 md:order-1">
+            <div className="hidden md:flex items-center gap-2 text-sky-300/90 text-sm font-medium mb-2"><span className="inline-block">🎁</span><span>Automatic Gift Code Redemption</span></div>
+            <h1 className="hidden md:block text-3xl md:text-4xl font-semibold tracking-tight">Never miss a reward again.</h1>
+            {/* Hide this paragraph on mobile since we render it above the form there */}
+            <p className="hidden md:block mt-2 md:text-lg text-base-content/70 max-w-2xl">
+              Enrol your chief(s) into The Great Redeemer's Miraculous Manifestation  program and from this day forth each and every gift code that comes out will be redeemed automagically for you to collect from your in game system mailbox.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <span className="badge badge-ghost">Free</span>
+              <span className="badge badge-ghost">No email</span>
+              <span className="badge badge-ghost">No spam</span>
+            </div>
+            <ul className="mt-3 text-sm md:text-base text-base-content/70 space-y-2">
+              <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span><span>Auto‑redeems codes as they appear</span></li>
               <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span><span>Works while you play — or sleep</span></li>
-              <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span><span>Simple setup with your Name, FID, and Alliance</span></li>
+              <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span><span>Set it once with your Username, User ID, and Alliance</span></li>
             </ul>
+            {/* Removed small inline count; moved prominent counter under the form per feedback */}
           </div>
           {/* Form card */}
-          <div className="md:col-span-1">
+          <div className="md:col-span-1 order-2 md:order-2">
             <div className="card shadow-xl bg-base-100/95 ring-1 ring-sky-300/40 border border-white/10">
               <div className="card-body">
-                <div className="text-base font-medium text-base-content/80">Get started</div>
                 <div className="grid grid-cols-1 gap-2 md:gap-3">
                   <input className="input input-bordered" placeholder="Username" value={name} onChange={e=>setName(e.target.value)} />
-                  <input className="input input-bordered" placeholder="User ID (FID)" value={fid} onChange={e=>setFid(e.target.value)} />
+                  <input className="input input-bordered" placeholder="User ID" value={fid} onChange={e=>setFid(e.target.value)} />
                   <select className="select select-bordered" value={alliance} onChange={e=>setAlliance(e.target.value ? Number(e.target.value) : '')}>
                     <option value="">Alliance</option>
                     {alliances.map(a=> <option key={a.id} value={a.id}>{a.name} ({a.tag})</option>)}
                   </select>
-                  <button className="btn btn-primary" onClick={async()=>{
+                  <button className={btnClass} onClick={async()=>{
                     if(!fid || !name){ return }
                     await fetch(`${API_BASE}/users`, { method:'POST', body: new URLSearchParams({ fid, name, alliance_id: String(alliance||'') }) })
                     setFid(''); setName(''); setAlliance('')
-                  }}>Sign up</button>
+                  }}>Activate</button>
                 </div>
-                <div className="text-xs text-base-content/60 text-center mt-2">Free to try. Takes 10 seconds.</div>
+                <div className="text-center mt-3" aria-live="polite">
+                  <span className="text-lg font-semibold tabular-nums">{data?.success ?? 0}</span>
+                  <span className="ml-2 text-sm text-base-content/70">codes redeemed so far</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* SECONDARY: light, non‑dominant info */}
+      {/* SECONDARY: three columns with more contrast */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Activity gets the most space of the secondary items */}
-        <div className="md:col-span-2 card bg-base-300/20 ring-1 ring-white/5">
+        {/* Left: Overview 2x2 grid (compact) */}
+        <div className="card bg-base-100/90 ring-1 ring-white/10 shadow-xl">
           <div className="card-body">
+            <div className="grid grid-cols-2 gap-3">
+              <MiniStat label="Users" value={data?.users ?? '—'} accent="violet" />
+              <MiniStat label="Gift Codes" value={data?.codes ?? '—'} accent="sky" />
+              <MiniStat label="Redeemed" value={data?.success ?? '—'} accent="emerald" />
+              <MiniStat label="Pending" value={data?.pending ?? '—'} accent="amber" />
+            </div>
+          </div>
+        </div>
+
+        {/* Middle: Activity (no nested inner box) */}
+        <div className="card bg-base-100/90 ring-1 ring-white/10 shadow-xl">
+          <div className="card-body py-4">
             <ActivityCarousel peek={peek} />
           </div>
         </div>
-        {/* Active codes sidebar */}
-        <div className="md:col-span-1 card bg-base-300/20 ring-1 ring-white/5">
+
+        {/* Right: Active codes */}
+        <div className="card bg-base-100/90 ring-1 ring-white/10 shadow-xl">
           <div className="card-body">
             <div className="text-xs text-base-content/60 mb-2">Active codes</div>
             <div className="flex flex-wrap gap-2">
@@ -117,30 +152,9 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-        {/* Overview metrics */}
-        <div className="md:col-span-3 card bg-base-300/20 ring-1 ring-white/5">
-          <div className="card-body">
-            <div className="text-xs text-base-content/60 mb-2">Overview</div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <MiniStat label="Users" value={data?.users ?? '—'} accent="violet" />
-              <MiniStat label="Gift Codes" value={data?.codes ?? '—'} accent="sky" />
-              <MiniStat label="Redeemed" value={data?.success ?? '—'} accent="emerald" />
-              <MiniStat label="Pending" value={data?.pending ?? '—'} accent="amber" />
-            </div>
-          </div>
-        </div>
       </section>
 
-      {/* Tertiary: system health */}
-      <section className="card bg-base-300/20 ring-1 ring-white/5">
-        <div className="card-body">
-          <div className="text-xs text-base-content/60">Heartbeats</div>
-          <div className="grid grid-cols-2 gap-3 divide-x divide-white/5">
-            <div>RSS: <span className={data?.rss_hb ? 'badge badge-success badge-outline' : 'badge badge-ghost'}>{data?.rss_hb ? formatAgo(data.rss_hb) : 'inactive'}</span></div>
-            <div>Worker: <span className={data?.worker_hb ? 'badge badge-success badge-outline' : 'badge badge-ghost'}>{data?.worker_hb ? formatAgo(data.worker_hb) : 'inactive'}</span></div>
-          </div>
-        </div>
-      </section>
+      
     </div>
   )
 }
@@ -180,38 +194,33 @@ function ActivityCarousel({ peek }: { peek: any }) {
     { key: 'rc-1', text: '—', status: 'queued' },
   ]
 
-  // Backward-compat: some earlier render logic referenced a local `items` variable.
-  // Keep an alias so builds never trip a ReferenceError even if the template
-  // is not fully updated everywhere.
-  const items = rows
+  // Rows represents the five slots shown in the carousel.
 
-  if (up[0]) rows[0] = { key: `up-${up[0].fid}-${up[0].code}`, text: `${up[0].name || `FID ${up[0].fid}`} — ${up[0].code}`, status: 'queued' }
-  if (up[1]) rows[1] = { key: `up-${up[1].fid}-${up[1].code}`, text: `${up[1].name || `FID ${up[1].fid}`} — ${up[1].code}`, status: 'queued' }
-  if (cur) rows[2] = { key: `cur-${cur.fid}-${cur.code}`, text: `${cur.name || `FID ${cur.fid}`} — ${cur.code}`, status: 'active' }
-  if (rc[0]) rows[3] = { key: `rc-${rc[0].id}`, text: `${rc[0].name || `FID ${rc[0].fid}`} — ${rc[0].code}`, status: rc[0].err ? 'error' : 'success' }
-  if (rc[1]) rows[4] = { key: `rc-${rc[1].id}`, text: `${rc[1].name || `FID ${rc[1].fid}`} — ${rc[1].code}`, status: rc[1].err ? 'error' : 'success' }
+  if (up[0]) rows[0] = { key: `up-${up[0].fid}-${up[0].code}`, text: `${up[0].name || `User ID ${up[0].fid}`} — ${up[0].code}`, status: 'queued' }
+  if (up[1]) rows[1] = { key: `up-${up[1].fid}-${up[1].code}`, text: `${up[1].name || `User ID ${up[1].fid}`} — ${up[1].code}`, status: 'queued' }
+  if (cur) rows[2] = { key: `cur-${cur.fid}-${cur.code}`, text: `${cur.name || `User ID ${cur.fid}`} — ${cur.code}`, status: 'active' }
+  if (rc[0]) rows[3] = { key: `rc-${rc[0].id}`, text: `${rc[0].name || `User ID ${rc[0].fid}`} — ${rc[0].code}`, status: rc[0].err ? 'error' : 'success' }
+  if (rc[1]) rows[4] = { key: `rc-${rc[1].id}`, text: `${rc[1].name || `User ID ${rc[1].fid}`} — ${rc[1].code}`, status: rc[1].err ? 'error' : 'success' }
 
   return (
-    <div className="mt-4">
-      <div className="text-xs text-base-content/60 text-center md:text-left mb-2">Activity</div>
-      <div className="relative mx-auto md:mx-0 max-w-sm">
-        <div className="overflow-hidden rounded-lg ring-1 ring-white/5 bg-base-300/20 px-3 py-2">
-          <div className="grid grid-rows-5 gap-2 relative">
-            {items.slice(0,5).map((it, idx)=> {
-              const badgeClass = it.status==='success' ? 'badge-success' : it.status==='error' ? 'badge-error' : it.status==='active' ? 'badge-info' : 'badge-ghost'
-              return (
-                <div key={it.key} className={`relative flex items-center justify-center px-2 py-1 rounded-full text-sm animate-slide-down-fade ${idx===2 ? 'ring-2 ring-primary/70' : ''}`}>
-                  <div className={`badge ${badgeClass} gap-2 whitespace-nowrap`}>{it.text}</div>
-                  {idx===2 && it.status==='active' && (
-                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-primary/90">
-                      <span className="inline-block animate-spin-slow">⚙️</span>
-                    </div>
-                  )}
+    <div className="mt-0">
+      <div className="text-xs text-base-content/60 mb-1">Currently processing</div>
+      <div className="grid grid-rows-5 gap-2">
+        {rows.slice(0,5).map((it, idx)=> {
+          const badgeClass = it.status==='success' ? 'badge-success' : it.status==='error' ? 'badge-error' : it.status==='active' ? 'badge-info' : 'badge-ghost'
+          const activeRing = idx===2 ? 'ring-2 ring-primary/70' : ''
+          return (
+            <div key={it.key} className={`relative flex items-center justify-center px-2 py-1 rounded-full text-sm animate-slide-down-fade ${activeRing}`}>
+              <div className={`badge ${badgeClass} gap-2 whitespace-nowrap`}>{it.text}</div>
+              {idx===2 && it.status==='active' && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-primary/90">
+                  <span className="inline-block motion-safe:animate-spin-slow" aria-hidden="true">⚙️</span>
+                  <span className="sr-only">Processing</span>
                 </div>
-              )
-            })}
-          </div>
-        </div>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -220,9 +229,9 @@ function ActivityCarousel({ peek }: { peek: any }) {
 function MiniStat({ label, value, accent }: { label: string, value: any, accent: 'emerald'|'sky'|'violet'|'amber' }) {
   const bar = accent === 'emerald' ? 'bg-emerald-400/60' : accent === 'sky' ? 'bg-sky-400/60' : accent === 'violet' ? 'bg-violet-400/60' : 'bg-amber-400/60'
   return (
-    <div className="relative overflow-hidden rounded-lg ring-1 ring-white/5 bg-base-300/20 p-3 text-center">
+    <div className="relative overflow-hidden rounded-lg ring-1 ring-white/5 bg-base-300/20 p-2 text-center">
       <div className="text-xs uppercase tracking-wide mb-1 text-base-content/60">{label}</div>
-      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-base font-semibold">{value}</div>
       <div className={`absolute left-0 top-0 h-full w-1 ${bar}`} />
     </div>
   )

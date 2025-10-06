@@ -42,6 +42,7 @@ def _status_path(name: str) -> str:
     return os.path.join(base, name)
 
 
+
 def extract_codes(text: str) -> list[str]:
     # Simple heuristic: uppercase letters/digits 6-16 length, plus common WOS patterns
     return re.findall(r"\b[A-Z0-9]{6,16}\b", text.upper())
@@ -184,23 +185,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                 added = _refill_queue(db)
                 if added:
                     print(f"[worker] queued {added} pairs", flush=True)
-                # One-time reconciliation each cycle: mark any redemptions with a RECEIVED msg as success
-                try:
-                    cutoff = datetime.utcnow() - timedelta(minutes=MIN_RETRY_MINUTES)
-                    # no-op variable to keep linter happy; we operate via ORM for portability
-                    reds = db.scalars(
-                        select(Redemption)
-                        .where(Redemption.status != RedemptionStatus.success.value)
-                    ).all()
-                    for r in reds:
-                        # find last attempt
-                        if r.attempts:
-                            last = r.attempts[-1]
-                            if last and last.result_msg and '"msg": "RECEIVED' in last.result_msg:
-                                r.status = RedemptionStatus.success.value
-                    db.commit()
-                except Exception:
-                    pass
+                # Legacy RECEIVED reconciliation removed; handled once at startup.
                 # Drain queue for this cycle
                 stop_cycle = False
                 while True:

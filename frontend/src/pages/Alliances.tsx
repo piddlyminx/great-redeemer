@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../lib/base'
+import { BTN_SOFT } from '../lib/ui'
 
 export default function Alliances() {
   const [rows, setRows] = useState<any[]>([])
@@ -42,7 +43,7 @@ export default function Alliances() {
           />
           <input className="input input-bordered" placeholder="Quota" type="number" value={form.quota} onChange={e=>setForm({...form, quota:Number(e.target.value)})}/>
           <button
-            className="btn btn-primary"
+            className={BTN_SOFT}
             disabled={!(form.name.trim() && /^[A-Za-z]{3}$/.test(form.tag) && form.quota>=0)}
             onClick={async()=>{
               const params = new URLSearchParams({name:form.name, tag:form.tag, quota:String(form.quota)})
@@ -96,14 +97,14 @@ export default function Alliances() {
                         <option>R4</option>
                         <option>R5</option>
                       </select>
-                      <button className="btn btn-primary btn-sm" onClick={()=>addMgr(a.id)}>Add</button>
+                      <button className={`${BTN_SOFT} btn-sm`} onClick={()=>addMgr(a.id)}>Add</button>
                     </div>
                   </td>
                   <td className="w-28">
                     {editingId===a.id ? (
                       <div className="flex gap-1">
                         <button
-                          className="btn btn-success btn-sm"
+                          className={`${BTN_SOFT} btn-sm`}
                           title="Save"
                           disabled={!(draft.name.trim() && /^[A-Za-z]{3}$/.test(draft.tag) && draft.quota>=0)}
                           onClick={async()=>{
@@ -119,10 +120,10 @@ export default function Alliances() {
                             setEditingId(null)
                           }}
                         >✔️</button>
-                        <button className="btn btn-ghost btn-sm" title="Cancel" onClick={()=>setEditingId(null)}>✖️</button>
+                        <button className={`${BTN_SOFT} btn-sm`} title="Cancel" onClick={()=>setEditingId(null)}>✖️</button>
                       </div>
                     ) : (
-                      <button className="btn btn-ghost btn-sm" title="Edit" onClick={()=>{ setEditingId(a.id); setDraft({ name: a.name||'', tag: a.tag||'', quota: a.quota||0 }) }}>✏️</button>
+                      <button className={`${BTN_SOFT} btn-sm`} title="Edit" onClick={()=>{ setEditingId(a.id); setDraft({ name: a.name||'', tag: a.tag||'', quota: a.quota||0 }) }}>✏️</button>
                     )}
                   </td>
                 </tr>
