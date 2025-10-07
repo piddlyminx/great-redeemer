@@ -50,6 +50,7 @@ services:
       - "${APP_PORT:-3380}:8000" # override APP_PORT for local testing
     volumes:
       - state:/state
+      - ./failures:/app/failures
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wos.rule=Host(`wos.ratme.org`) && PathPrefix(`/great-redeemer`)"
@@ -86,6 +87,7 @@ services:
     volumes:
       - state:/state
       - ./logs:/logs
+      - ./failures:/app/failures
 
 volumes:
   pgdata:
