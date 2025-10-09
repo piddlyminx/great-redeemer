@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -46,8 +46,8 @@ class Alliance(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     tag: Mapped[str] = mapped_column(String(3), nullable=False)
     quota: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     users: Mapped[list[User]] = relationship("User", back_populates="alliance")  # type: ignore[name-defined]
     managers: Mapped[list[WebAccount]] = relationship("WebAccount", back_populates="alliance")  # type: ignore[name-defined]
@@ -68,7 +68,7 @@ class User(Base):
     state: Mapped[Optional[str]] = mapped_column(String(50))
     rank: Mapped[Optional[str]] = mapped_column(String(10))  # e.g., R1..R5
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     alliance: Mapped[Optional[Alliance]] = relationship("Alliance", back_populates="users")
@@ -95,7 +95,7 @@ class WebAccount(Base):
     alliance_id: Mapped[Optional[int]] = mapped_column(ForeignKey("alliances.id", ondelete="SET NULL"))
     alliance_rank: Mapped[Optional[str]] = mapped_column(String(2))  # R4 or R5
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     alliance: Mapped[Optional[Alliance]] = relationship("Alliance", back_populates="managers")
 
@@ -110,8 +110,8 @@ class GiftCode(Base):
     source_url: Mapped[Optional[str]] = mapped_column(String(500))
     metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     redemptions: Mapped[list[Redemption]] = relationship("Redemption", back_populates="gift_code")  # type: ignore[name-defined]
@@ -132,8 +132,8 @@ class Redemption(Base):
     rewards: Mapped[Optional[str]] = mapped_column(Text)
     result_msg: Mapped[Optional[str]] = mapped_column(Text)
     err_code: Mapped[Optional[int]] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     last_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
@@ -156,7 +156,7 @@ class RedemptionAttempt(Base):
     captcha: Mapped[Optional[str]] = mapped_column(String(8))
     result_msg: Mapped[Optional[str]] = mapped_column(Text)
     err_code: Mapped[Optional[int]] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     redemption: Mapped[Redemption] = relationship("Redemption", back_populates="attempts")  # type: ignore[name-defined]
 

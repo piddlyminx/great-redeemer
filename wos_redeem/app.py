@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta as _td
 import asyncio
 import re
 import os
@@ -213,10 +213,9 @@ def api_summary(db: Session = Depends(get_db)):
     try:
         from sqlalchemy import exists
         from .tasks import MAX_ATTEMPTS_PER_PAIR, MIN_RETRY_MINUTES as _MIN
-        cutoff = datetime.utcnow()
+        cutoff = datetime.now(timezone.utc)
         if _MIN:
-            from datetime import timedelta as _td
-            cutoff = datetime.utcnow() - _td(minutes=_MIN)
+            cutoff = datetime.now(timezone.utc) - _td(minutes=_MIN)
         s = (
             select(func.count())
             .select_from(User, GiftCode)
@@ -516,130 +515,124 @@ def api_attempts(limit: int = 50, db: Session = Depends(get_db)):
 
 @app.get("/api/worker_events")
 async def api_worker_events(request: Request):
-    """SSE stream of {summary, peek} updates every ~2s.
+    """SSE stream of {summary, peek} updates.
 
-    Works behind Traefik; the UI falls back to polling if SSE is unavailable.
+    - Emits "peek" (current/upcoming + recent) immediately when the worker's
+      status file changes, detected via a fast poll (SSE_POLL_MS; default 250ms).
+    - Emits "summary" (aggregate counters) at a lower cadence
+      (SSE_SUMMARY_INTERVAL_S; default 2s).
+    - Falls back to polling on the client if SSE is unavailable.
     """
 
     async def event_gen():
+        import json as _json
+        import os as _os
+        import time as _time
+
+        status_path = _os.path.join(STATUS_DIR or ".", ".worker_status")
+        # Tunables (env): fast file poll, slower summary cadence, and recents rate limit
+        try:
+            poll_ms = int(_os.getenv("SSE_POLL_MS", "250"))
+        except Exception:
+            poll_ms = 250
+        poll_s = max(0.05, min(1.0, poll_ms / 1000.0))
+        try:
+            summary_interval_s = float(_os.getenv("SSE_SUMMARY_INTERVAL_S", "2"))
+        except Exception:
+            summary_interval_s = 2.0
+        try:
+            recents_interval_s = float(_os.getenv("SSE_RECENTS_INTERVAL_S", "1"))
+        except Exception:
+            recents_interval_s = 1.0
+
+        last_sig = None  # (mtime_ns, size)
+        last_summary_ts = 0.0
+        last_recents_ts = 0.0
+        cached_status = None
+
+        # On connect, push at least one summary quickly
+        first_tick = True
+
         while True:
             if await request.is_disconnected():
                 break
             try:
-                # Summary counts
-                with SessionLocal() as db:
-                    users = db.scalar(select(func.count(User.id))) or 0
-                    codes = db.scalar(select(func.count(GiftCode.id))) or 0
-                    success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]))) or 0
-                    failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
-                    # Prefer worker eligible backlog from status file; fallback to SQL estimate
-                    try:
-                        pending = int((worker_status or {}).get("eligible")) if isinstance(worker_status, dict) and (worker_status or {}).get("eligible") is not None else None
-                    except Exception:
-                        pending = None
-                    if pending is None:
-                        try:
-                            from sqlalchemy import exists
-                            from .tasks import MAX_ATTEMPTS_PER_PAIR
-                            from datetime import timedelta as _td
-                            cutoff = datetime.utcnow() - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.utcnow()
-                            s = (
-                                select(func.count())
-                                .select_from(User, GiftCode)
-                                .where(User.active == True, GiftCode.active == True)
-                                .where(~exists(select(Redemption.id).where(
-                                    Redemption.user_id == User.id,
-                                    Redemption.gift_code_id == GiftCode.id,
-                                    Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]),
-                                )))
-                                .where(~exists(select(Redemption.id).where(
-                                    Redemption.user_id == User.id,
-                                    Redemption.gift_code_id == GiftCode.id,
-                                    Redemption.attempt_count >= MAX_ATTEMPTS_PER_PAIR,
-                                )))
-                                .where(~exists(select(Redemption.id).where(
-                                    Redemption.user_id == User.id,
-                                    Redemption.gift_code_id == GiftCode.id,
-                                    Redemption.last_attempt_at.is_not(None),
-                                    Redemption.last_attempt_at > cutoff,
-                                )))
-                            )
-                            with SessionLocal() as db2:
-                                pending = int(db2.scalar(s) or 0)
-                        except Exception:
-                            pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
-                def _read(name: str):
-                    try:
-                        base = STATUS_DIR or "."
-                        with open(os.path.join(base, name)) as f:
-                            return f.read().strip()
-                    except Exception:
-                        return None
-                rss_hb = _read(".rss_heartbeat")
-                worker_hb = _read(".worker_heartbeat")
-                try:
-                    import json as _json
-                    with open(os.path.join(STATUS_DIR or ".", ".worker_status")) as f:
-                        worker_status = _json.loads(f.read())
-                except Exception:
-                    worker_status = None
+                payload: dict = {}
 
-                # Build peek (recent, current, upcoming)
-                with SessionLocal() as db:
-                    limit = 5
-                    q = (
-                        db.query(RedemptionAttempt, Redemption, User, GiftCode)
-                        .join(Redemption, RedemptionAttempt.redemption_id == Redemption.id)
-                        .join(User, Redemption.user_id == User.id)
-                        .join(GiftCode, Redemption.gift_code_id == GiftCode.id)
-                        .order_by(RedemptionAttempt.created_at.desc())
-                        .limit(100)
-                    )
-                    recents = []
-                    seen_pairs = set()
-                    for att, red, user, code in q.all():
-                        pair = (user.fid, code.code)
-                        if pair in seen_pairs:
-                            continue
-                        seen_pairs.add(pair)
-                        ok = (red.status in ("redeemed_new", "redeemed_already"))
-                        recents.append({
-                            "id": att.id,
-                            "ts": att.created_at.isoformat() if att.created_at else None,
-                            "fid": user.fid,
-                            "name": user.name,
-                            "code": code.code,
-                            # Show red only if the redemption is not in redeemed states
-                            "err": 0 if ok else 1,
-                            "msg": att.result_msg[:120] if att.result_msg else None,
-                        })
-                    recents = recents[:limit]
-                    # current + queue from status file
-                    queue_preview = []
+                # Detect status file changes cheaply (no JSON parse unless changed)
+                try:
+                    st = _os.stat(status_path)
+                    sig = (st.st_mtime_ns, st.st_size)
+                except Exception:
+                    sig = None
+
+                if sig and sig != last_sig:
+                    last_sig = sig
                     try:
-                        import json as _json
-                        with open(os.path.join(STATUS_DIR or ".", ".worker_status")) as f:
-                            _stat = _json.loads(f.read())
-                            cur = _stat.get("current")
-                            queue_preview = _stat.get("queue") or []
+                        with open(status_path) as f:
+                            cached_status = _json.loads(f.read())
                     except Exception:
-                        cur = None
-                        queue_preview = []
-                    if cur:
-                        try:
-                            with SessionLocal() as db2:
-                                u = None
-                                if cur.get("user_id"):
-                                    u = db2.get(User, int(cur["user_id"]))
-                                elif cur.get("fid"):
-                                    u = db2.scalar(select(User).where(User.fid == int(cur["fid"])) )
+                        cached_status = None
+
+                    # Build "peek" block
+                    cur = None
+                    queue_preview = []
+                    if isinstance(cached_status, dict):
+                        cur = cached_status.get("current")
+                        queue_preview = cached_status.get("queue") or []
+
+                    # Enrich current with user name (best effort)
+                    try:
+                        with SessionLocal() as db:
+                            if cur and cur.get("user_id"):
+                                u = db.get(User, int(cur["user_id"]))
                                 if u:
                                     cur["name"] = u.name
+                            elif cur and cur.get("fid"):
+                                u = db.scalar(select(User).where(User.fid == int(cur["fid"])) )
+                                if u:
+                                    cur["name"] = u.name
+                    except Exception:
+                        pass
+
+                    # Recent attempts (rate-limited to recents_interval_s)
+                    recents = None
+                    now = _time.time()
+                    if (now - last_recents_ts) >= recents_interval_s or first_tick:
+                        last_recents_ts = now
+                        try:
+                            with SessionLocal() as db:
+                                q = (
+                                    db.query(RedemptionAttempt, Redemption, User, GiftCode)
+                                    .join(Redemption, RedemptionAttempt.redemption_id == Redemption.id)
+                                    .join(User, Redemption.user_id == User.id)
+                                    .join(GiftCode, Redemption.gift_code_id == GiftCode.id)
+                                    .order_by(RedemptionAttempt.created_at.desc())
+                                    .limit(100)
+                                )
+                                _recents = []
+                                _seen = set()
+                                for att, red, user, code in q.all():
+                                    pair = (user.fid, code.code)
+                                    if pair in _seen:
+                                        continue
+                                    _seen.add(pair)
+                                    ok = (red.status in ("redeemed_new", "redeemed_already"))
+                                    _recents.append({
+                                        "id": att.id,
+                                        "ts": att.created_at.isoformat() if att.created_at else None,
+                                        "fid": user.fid,
+                                        "name": user.name,
+                                        "code": code.code,
+                                        "err": 0 if ok else 1,
+                                        "msg": att.result_msg[:120] if att.result_msg else None,
+                                    })
+                                recents = _recents[:5]
                         except Exception:
-                            pass
-                    # upcoming: single source of truth = worker queue snapshot (no DB fallback)
+                            recents = None
+
                     upcoming = []
-                    for q in queue_preview[:limit]:
+                    for q in (queue_preview or [])[:5]:
                         upcoming.append({
                             "fid": q.get("fid"),
                             "user_id": q.get("user_id"),
@@ -648,15 +641,85 @@ async def api_worker_events(request: Request):
                             "gift_code_id": q.get("gift_code_id"),
                         })
 
-                payload = {
-                    "summary": {"users": users, "codes": codes, "success": success, "failed": failed, "pending": pending, "rss_hb": rss_hb, "worker_hb": worker_hb, "worker_status": worker_status},
-                    "peek": {"current": cur, "recent": recents, "upcoming": upcoming[:limit]},
-                }
-                import json as _json
-                yield f"data: {_json.dumps(payload)}\n\n"
+                    payload["peek"] = {"current": cur, "recent": recents, "upcoming": upcoming[:5]}
+
+                # Build "summary" block on cadence
+                now = _time.time()
+                if first_tick or (now - last_summary_ts) >= summary_interval_s:
+                    last_summary_ts = now
+                    try:
+                        with SessionLocal() as db:
+                            users = db.scalar(select(func.count(User.id))) or 0
+                            codes = db.scalar(select(func.count(GiftCode.id))) or 0
+                            success = db.scalar(select(func.count(Redemption.id)).where(Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]))) or 0
+                            failed = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "failed")) or 0
+                            # Prefer worker-computed eligible backlog from cached status; fallback to SQL estimate
+                            try:
+                                pending = int((cached_status or {}).get("eligible")) if isinstance(cached_status, dict) and (cached_status or {}).get("eligible") is not None else None
+                            except Exception:
+                                pending = None
+                            if pending is None:
+                                try:
+                                    from sqlalchemy import exists
+                                    from .tasks import MAX_ATTEMPTS_PER_PAIR
+                                    cutoff = datetime.now(timezone.utc) - _td(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.now(timezone.utc)
+                                    s = (
+                                        select(func.count())
+                                        .select_from(User, GiftCode)
+                                        .where(User.active == True, GiftCode.active == True)
+                                        .where(~exists(select(Redemption.id).where(
+                                            Redemption.user_id == User.id,
+                                            Redemption.gift_code_id == GiftCode.id,
+                                            Redemption.status.in_(["redeemed_new", "redeemed_already", "success"]),
+                                        )))
+                                        .where(~exists(select(Redemption.id).where(
+                                            Redemption.user_id == User.id,
+                                            Redemption.gift_code_id == GiftCode.id,
+                                            Redemption.attempt_count >= MAX_ATTEMPTS_PER_PAIR,
+                                        )))
+                                        .where(~exists(select(Redemption.id).where(
+                                            Redemption.user_id == User.id,
+                                            Redemption.gift_code_id == GiftCode.id,
+                                            Redemption.last_attempt_at.is_not(None),
+                                            Redemption.last_attempt_at > cutoff,
+                                        )))
+                                    )
+                                    with SessionLocal() as db2:
+                                        pending = int(db2.scalar(s) or 0)
+                                except Exception:
+                                    pending = db.scalar(select(func.count(Redemption.id)).where(Redemption.status == "pending")) or 0
+
+                        def _read(name: str):
+                            try:
+                                base = STATUS_DIR or "."
+                                with open(os.path.join(base, name)) as f:
+                                    return f.read().strip()
+                            except Exception:
+                                return None
+                        rss_hb = _read(".rss_heartbeat")
+                        worker_hb = _read(".worker_heartbeat")
+
+                        payload["summary"] = {
+                            "users": users,
+                            "codes": codes,
+                            "success": success,
+                            "failed": failed,
+                            "pending": pending,
+                            "rss_hb": rss_hb,
+                            "worker_hb": worker_hb,
+                            "worker_status": cached_status,
+                        }
+                    except Exception:
+                        # ignore summary errors; client will fall back to polling
+                        pass
+
+                if payload:
+                    yield f"data: {_json.dumps(payload)}\n\n"
+                first_tick = False
             except Exception:
+                # Keep the stream alive on transient errors
                 yield "data: {}\n\n"
-            await asyncio.sleep(2)
+            await asyncio.sleep(poll_s)
 
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
