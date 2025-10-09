@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Alliances from './pages/Alliances'
 import Users from './pages/Users'
 import Codes from './pages/Codes'
+import CodeDetail from './pages/CodeDetail'
 import UserDetail from './pages/UserDetail'
 import Monitor from './pages/Monitor'
 import { getPrefix } from './lib/base'
@@ -23,6 +24,7 @@ const router = createBrowserRouter([
       { path: 'alliances', element: <Alliances /> },
       { path: 'users', element: <Users /> },
       { path: 'codes', element: <Codes /> },
+      { path: 'codes/:code', element: <CodeDetail /> },
       { path: 'users/:id', element: <UserDetail /> },
       { path: 'monitor', element: <Monitor /> },
     ],

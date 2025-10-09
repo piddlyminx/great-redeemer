@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import requests
 
@@ -24,7 +24,13 @@ class CaptchaSolverError(Exception):
         self.content = content
 
 
-def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int = 2) -> str:
+def solve_captcha_via_openrouter(
+    data_url: str,
+    api_key: str,
+    max_attempts: int = 2,
+    *,
+    return_confidence: bool = False,
+) -> Union[str, Tuple[str, Optional[float]]]:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -34,9 +40,10 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
         "You are a vision assistant that reads short CAPTCHA images.\n"
         "Rules:\n"
         " - The CAPTCHA is exactly 4 case-sensitive alphanumeric characters [A-Za-z0-9].\n"
-        " - Do not include spaces or quotes.\n"
-        " - Respond ONLY with a compact JSON object of the form: {\"captcha\":\"AB12\"}.\n"
-        " - If uncertain, return your best guess in the same JSON format."
+        " - Output MUST be a single compact JSON object: {\"captcha\":\"AB12\",\"confidence\":0.82}.\n"
+        " - confidence is a number in [0,1] indicating how sure you are the captcha is correct.\n"
+        " - Always include both keys. No extra fields, no prose, no backticks.\n"
+        " - If uncertain, still provide your best 4-character guess and reflect that in confidence."
     )
 
     messages = [
@@ -58,6 +65,7 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
 
     last_err: Optional[str] = None
     last_guess: Optional[str] = None
+    last_conf: Optional[float] = None
     last_content: Optional[str] = None
     for _ in range(max_attempts):
         try:
@@ -77,22 +85,40 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
                     content_clean = m.group(0)
 
             captcha = None
+            conf: Optional[float] = None
             try:
                 obj = json.loads(content_clean)
-                if isinstance(obj, dict) and "captcha" in obj:
-                    captcha = str(obj["captcha"]).strip()
-                    last_guess = captcha
+                if isinstance(obj, dict):
+                    # Preferred schema: {"captcha": "AB12", "confidence": 0.82}
+                    if "captcha" in obj:
+                        captcha = str(obj["captcha"]).strip()
+                    if "confidence" in obj:
+                        try:
+                            conf_val = float(obj["confidence"])  # type: ignore[arg-type]
+                            # clamp to [0,1]
+                            if conf_val < 0:
+                                conf_val = 0.0
+                            if conf_val > 1:
+                                conf_val = 1.0
+                            conf = conf_val
+                        except Exception:
+                            conf = None
+                    last_guess = captcha if captcha else last_guess
+                    last_conf = conf if conf is not None else last_conf
             except json.JSONDecodeError:
                 # Fallback: extract 4-char alnum anywhere in the string
                 m = re.search(CAPTCHA_REGEX, content_clean)
                 if m:
                     captcha = m.group(0)
                     last_guess = captcha
+                    conf = None
             last_content = content_clean
 
             if not captcha or not CAPTCHA_REGEX.fullmatch(captcha):
                 last_err = f"Invalid captcha format from model: {content_clean[:200]!r}"
                 continue
+            if return_confidence:
+                return captcha, conf
             return captcha
         except Exception as e:
             last_err = f"OpenRouter parse error: {e}"

@@ -461,8 +461,183 @@ def api_create_user(fid: int = Form(...), name: Optional[str] = Form(None), alli
 
 @app.get("/api/codes")
 def api_codes(db: Session = Depends(get_db)):
-    rows = db.scalars(select(GiftCode).order_by(GiftCode.first_seen_at.desc()).limit(200)).all()
-    return [{"id": c.id, "code": c.code, "active": c.active, "first_seen_at": c.first_seen_at.isoformat() if c.first_seen_at else None} for c in rows]
+    # Fetch recent codes (limit to keep aggregation bounded)
+    codes = db.scalars(select(GiftCode).order_by(GiftCode.first_seen_at.desc()).limit(200)).all()
+    if not codes:
+        return []
+
+    code_ids = [c.id for c in codes]
+    redeemed_statuses = ["redeemed_new", "redeemed_already", "success"]
+
+    # Aggregate counts per code in a few grouped queries
+    rows_redeemed = db.execute(
+        select(Redemption.gift_code_id, func.count(Redemption.id))
+        .where(Redemption.gift_code_id.in_(code_ids), Redemption.status.in_(redeemed_statuses))
+        .group_by(Redemption.gift_code_id)
+    ).all()
+    redeemed_map = {cid: int(cnt) for cid, cnt in rows_redeemed}
+
+    rows_failed = db.execute(
+        select(Redemption.gift_code_id, func.count(Redemption.id))
+        .where(Redemption.gift_code_id.in_(code_ids), Redemption.status == "failed")
+        .group_by(Redemption.gift_code_id)
+    ).all()
+    failed_map = {cid: int(cnt) for cid, cnt in rows_failed}
+
+    # Distinct finished users (redeemed or failed) per code for pending computation on active codes
+    rows_finished = db.execute(
+        select(Redemption.gift_code_id, func.count(func.distinct(Redemption.user_id)))
+        .where(
+            Redemption.gift_code_id.in_(code_ids),
+            Redemption.status.in_(redeemed_statuses + ["failed"]),
+        )
+        .group_by(Redemption.gift_code_id)
+    ).all()
+    finished_users_map = {cid: int(cnt) for cid, cnt in rows_finished}
+
+    # Pending rows for inactive codes only (for active codes we compute below)
+    rows_pending = db.execute(
+        select(Redemption.gift_code_id, func.count(Redemption.id))
+        .where(Redemption.gift_code_id.in_(code_ids), Redemption.status == "pending")
+        .group_by(Redemption.gift_code_id)
+    ).all()
+    pending_rows_map = {cid: int(cnt) for cid, cnt in rows_pending}
+
+    total_active_users = int(db.scalar(select(func.count(User.id)).where(User.active.is_(True))) or 0)
+
+    out = []
+    for c in codes:
+        redeemed = redeemed_map.get(c.id, 0)
+        failed = failed_map.get(c.id, 0)
+        if c.active:
+            finished = finished_users_map.get(c.id, 0)
+            pending = max(0, total_active_users - finished)
+        else:
+            pending = pending_rows_map.get(c.id, 0)
+        out.append(
+            {
+                "id": c.id,
+                "code": c.code,
+                "active": c.active,
+                "first_seen_at": c.first_seen_at.isoformat() if c.first_seen_at else None,
+                "expires_at": c.expires_at.isoformat() if c.expires_at else None,
+                "redeemed": redeemed,
+                "failed": failed,
+                "pending": pending,
+            }
+        )
+    return out
+
+
+@app.get("/api/codes/{code}/detail")
+def api_code_detail(code: str, db: Session = Depends(get_db)):
+    gc = db.scalar(select(GiftCode).where(GiftCode.code == code))
+    if not gc:
+        raise HTTPException(404)
+
+    redeemed_statuses = ["redeemed_new", "redeemed_already", "success"]
+
+    redeemed = int(
+        db.scalar(
+            select(func.count(Redemption.id)).where(
+                Redemption.gift_code_id == gc.id,
+                Redemption.status.in_(redeemed_statuses),
+            )
+        )
+        or 0
+    )
+
+    failed = int(
+        db.scalar(
+            select(func.count(Redemption.id)).where(
+                Redemption.gift_code_id == gc.id, Redemption.status == "failed"
+            )
+        )
+        or 0
+    )
+
+    # For active codes, "pending" should include any active user who does not have
+    # a redeemed or failed status for this code (even if no Redemption row exists).
+    if gc.active:
+        total_active_users = int(db.scalar(select(func.count(User.id)).where(User.active.is_(True))) or 0)
+        finished_users = int(
+            db.scalar(
+                select(func.count(func.distinct(Redemption.user_id))).where(
+                    Redemption.gift_code_id == gc.id,
+                    Redemption.status.in_(redeemed_statuses + ["failed"]),
+                )
+            )
+            or 0
+        )
+        pending = max(0, total_active_users - finished_users)
+    else:
+        pending = int(
+            db.scalar(
+                select(func.count(Redemption.id)).where(
+                    Redemption.gift_code_id == gc.id, Redemption.status == "pending"
+                )
+            )
+            or 0
+        )
+
+    # Build per-user rows
+    rows: list[dict] = []
+    if gc.active:
+        # Show all active users; default status is "pending" if no Redemption row.
+        from sqlalchemy import and_  # local import to avoid top clutter
+        q = (
+            select(User, Redemption)
+            .outerjoin(
+                Redemption,
+                and_(Redemption.user_id == User.id, Redemption.gift_code_id == gc.id),
+            )
+            .where(User.active.is_(True))
+            .order_by(User.created_at.desc())
+        )
+        for u, r in db.execute(q).all():
+            last_dt = None
+            if r is not None:
+                last_dt = r.last_attempt_at or r.updated_at or r.created_at
+            rows.append(
+                {
+                    "user_id": u.id,
+                    "fid": u.fid,
+                    "name": u.name,
+                    "status": (r.status if r is not None and r.status else "pending"),
+                    "attempt_count": (r.attempt_count if r is not None else 0),
+                    "last_at": (last_dt.isoformat() if last_dt else None),
+                }
+            )
+    else:
+        # For inactive codes, list existing Redemption rows (typically historical results)
+        q = (
+            select(Redemption, User)
+            .join(User, Redemption.user_id == User.id)
+            .where(Redemption.gift_code_id == gc.id)
+            .order_by(Redemption.updated_at.desc())
+        )
+        for r, u in db.execute(q).all():
+            last_dt = r.last_attempt_at or r.updated_at or r.created_at
+            rows.append(
+                {
+                    "user_id": u.id,
+                    "fid": u.fid,
+                    "name": u.name,
+                    "status": r.status,
+                    "attempt_count": r.attempt_count,
+                    "last_at": last_dt.isoformat() if last_dt else None,
+                }
+            )
+
+    return {
+        "id": gc.id,
+        "code": gc.code,
+        "active": gc.active,
+        "first_seen_at": gc.first_seen_at.isoformat() if gc.first_seen_at else None,
+        "expires_at": gc.expires_at.isoformat() if gc.expires_at else None,
+        "summary": {"redeemed": redeemed, "failed": failed, "pending": pending},
+        "users": rows,
+    }
 
 
 @app.get("/api/users/{user_id}/redemptions")
