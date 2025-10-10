@@ -216,6 +216,7 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
     Returns (guess, raw_text). Guess is None on failure.
     """
     prompt = f"Read the 4 alphanumeric characters (case sensitive) in {image_path}"
+    raw: Optional[str] = None
     try:
         import tempfile, os
         # Prefer writing last message to a temp file (more reliable than stdout banners)
@@ -236,16 +237,6 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
             text=True,
             timeout=15,
         )
-    except subprocess.TimeoutExpired as e:
-        _LOGGER.info(
-            json.dumps({
-                "event": "codex_exec_timeout",
-                "timeout_s": 15,
-                "stderr": (getattr(e, "stderr", "") or "")[:200],
-                "stdout": (getattr(e, "output", "") or "")[:200],
-            })
-        )
-        return None, None
         if res.returncode != 0:
             _LOGGER.info(
                 json.dumps({
@@ -258,7 +249,6 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
             # surface some content for upstream logs
             combined = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
             return None, combined[:500]
-        raw = None
         try:
             with open(out_path, "r", encoding="utf-8") as fh:
                 raw = fh.read().strip()
@@ -272,8 +262,20 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
         # Fallback to stdout if file empty
         if not raw:
             raw = (res.stdout or "").strip()
+    except subprocess.TimeoutExpired as e:
+        _LOGGER.info(
+            json.dumps({
+                "event": "codex_exec_timeout",
+                "timeout_s": 15,
+                "stderr": (getattr(e, "stderr", "") or "")[:200],
+                "stdout": (getattr(e, "output", "") or "")[:200],
+            })
+        )
+        return None, None
     except Exception as e:
         _LOGGER.info(f"[solver] codex exec failed: {e}")
+        return None, None
+    if not raw:
         return None, None
     guess, cleaned = _extract_captcha_from_content(raw)
     return guess, (cleaned or raw)
