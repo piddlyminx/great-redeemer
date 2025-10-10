@@ -9,6 +9,7 @@ export default function Users() {
   const [name, setName] = useState('')
   const [alliance, setAlliance] = useState<number|''>('')
   const [alliances, setAlliances] = useState<any[]>([])
+  const [err, setErr] = useState<string>('')
   const [q, setQ] = useState('')
   const load = () => fetch(`${API_BASE}/users${q?`?q=${encodeURIComponent(q)}`:''}`).then(r=>r.json()).then(setRows)
   // fetch alliances once
@@ -27,12 +28,46 @@ export default function Users() {
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
           <input className="input input-bordered" placeholder="User ID" value={fid} onChange={e=>setFid(e.target.value)}/>
           <input className="input input-bordered" placeholder="Name" value={name} onChange={e=>setName(e.target.value)}/>
-          <select className="select select-bordered" value={alliance} onChange={e=>setAlliance(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">Alliance</option>
+          <select className="select select-bordered" aria-invalid={alliance==='' ? true : undefined} required value={alliance} onChange={e=>setAlliance(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">Alliance (required)</option>
             {alliances.map(a=> <option key={a.id} value={a.id}>{a.name} ({a.tag})</option>)}
           </select>
-          <button className={BTN_SOFT} onClick={async()=>{await fetch(`${API_BASE}/users`,{method:'POST',body:new URLSearchParams({fid, name, alliance_id: String(alliance||'')})}); setFid(''); setName(''); setAlliance(''); load()}}>Add</button>
+          <button
+            type="button"
+            className={BTN_SOFT}
+            disabled={!fid.trim() || alliance === ''}
+            onClick={async()=>{
+              setErr('')
+              if (!fid.trim()) { setErr('User ID is required'); return }
+              if (alliance === '') { setErr('Please select an alliance'); return }
+              try {
+                const form = new URLSearchParams({ fid: fid.trim(), name, alliance_id: String(alliance) })
+                const r = await fetch(`${API_BASE}/users`, { method:'POST', body: form })
+                if (!r.ok) {
+                  let msg = `HTTP ${r.status}`
+                  try {
+                    const j = await r.json()
+                    if (j?.detail) {
+                      if (Array.isArray(j.detail) && j.detail.length) msg = j.detail[0]?.msg || msg
+                      else if (typeof j.detail === 'string') msg = j.detail
+                    }
+                  } catch {
+                    const t = await r.text(); if (t) msg = t
+                  }
+                  // Normalize common validation cases
+                  if (r.status === 400 || r.status === 422) {
+                    if (msg.toLowerCase().includes('alliance')) msg = 'Alliance is required — please select an alliance.'
+                  }
+                  throw new Error(msg)
+                }
+                setFid(''); setName(''); setAlliance(''); load()
+              } catch (e:any) {
+                setErr(String(e.message || e))
+              }
+            }}
+          >Add</button>
         </div>
+        {err && <div className="text-sm text-error mt-2">{err}</div>}
       </div></div>
       <div className="card bg-base-100/80 shadow-2xl border border-white/10 backdrop-blur"><div className="card-body">
         <div className="font-semibold mb-2 pl-3 border-l-2 border-sky-400/60">Users</div>
@@ -42,7 +77,11 @@ export default function Users() {
         </div>
         <div className="overflow-x-auto rounded-lg ring-1 ring-white/5">
           <table className="table table-zebra">
-            <thead><tr><th>User ID</th><th>Name</th><th>Alliance</th><th>Active</th><th>Created</th></tr></thead>
+            <thead>
+              <tr>
+                <th>User ID</th><th>Name</th><th>Alliance</th><th>Active</th><th>Created</th>
+              </tr>
+            </thead>
             <tbody>
               {rows.map(u=> (
                 <tr key={u.id}>

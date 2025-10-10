@@ -448,16 +448,42 @@ def api_users(alliance_id: Optional[int] = None, q: Optional[str] = None, db: Se
 
 
 @app.post("/api/users")
-def api_create_user(fid: int = Form(...), name: Optional[str] = Form(None), alliance_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
+def api_create_user(
+    fid: int = Form(...),
+    name: Optional[str] = Form(None),
+    alliance_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+):
     if not DISABLE_AUTH_ALL:
         _require(True)
+    # Validate alliance is provided and exists (business rule; not enforced at DB level)
+    if not alliance_id:
+        raise HTTPException(status_code=400, detail="alliance_id is required")
+    if db.get(Alliance, int(alliance_id)) is None:
+        raise HTTPException(status_code=400, detail="alliance not found")
     if db.scalar(select(User).where(User.fid == fid)):
         return {"ok": True, "existing": True}
-    u = User(fid=fid, name=name or None, alliance_id=alliance_id if alliance_id else None)
+    u = User(fid=fid, name=name or None, alliance_id=int(alliance_id))
     db.add(u)
     db.commit()
     return {"ok": True, "id": u.id}
 
+
+@app.delete("/api/users/{user_id}")
+def api_delete_user(user_id: int, db: Session = Depends(get_db)):
+    """Delete a user and cascade-remove related rows.
+
+    Hard delete is intentional so the User.fid unique constraint is freed for
+    re-adding the same player later. Redemptions and attempts cascade via FK.
+    """
+    if not DISABLE_AUTH_ALL:
+        _require(True)
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(status_code=404, detail="user not found")
+    db.delete(u)
+    db.commit()
+    return {"ok": True}
 
 @app.get("/api/codes")
 def api_codes(db: Session = Depends(get_db)):

@@ -28,6 +28,7 @@ REDEEM_QUEUE_MAX = int(os.getenv("REDEEM_QUEUE_MAX", "20"))
 MAX_ATTEMPTS_PER_PAIR = int(os.getenv("REDEEM_MAX_ATTEMPTS_PER_PAIR", "3"))
 # Timing
 ATTEMPT_DELAY_S = float(os.getenv("REDEEM_DELAY_S", "4"))
+JITTER_FRAC = float(os.getenv("REDEEM_JITTER_FRAC", "0.5"))  # fraction of base delay used as +jitter
 MIN_RETRY_MINUTES = int(os.getenv("REDEEM_MIN_RETRY_MINUTES", "15"))
 REDEEM_POLL_SECONDS = int(os.getenv("REDEEM_POLL_SECONDS", "20"))
 REDEEM_OUTER_RETRIES = int(os.getenv("REDEEM_OUTER_RETRIES", "2"))
@@ -267,6 +268,19 @@ def _refill_queue(db: Session) -> int:
         return 0
     pairs = _eligible_pairs(db)
     return worker_state.add_unique(pairs[:need])
+
+
+def _sleep_backoff(multiplier: float = 1.0) -> None:
+    """Sleep for ATTEMPT_DELAY_S * multiplier plus a small positive jitter.
+
+    Jitter defaults to `JITTER_FRAC` of the base. Example: with ATTEMPT_DELAY_S=4s and multiplier=2,
+    base=8s and jitter in [0, 2s].
+    """
+    base = max(0.0, ATTEMPT_DELAY_S * multiplier)
+    if base <= 0:
+        return
+    jitter = random.uniform(0.0, base * max(0.0, JITTER_FRAC))
+    time.sleep(base + jitter)
 
 
 def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", max_attempts_per_pair: int = None, poll_seconds: int = None) -> None:
@@ -514,9 +528,8 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 except Exception:
                                     pass
                                 errors += 1
-                                # small backoff then continue inner loop
-                                if ATTEMPT_DELAY_S > 0:
-                                    time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                                # Backoff: ATTEMPT_DELAY_S + jitter
+                                _sleep_backoff(1.0)
                                 continue
                             elif msg_norm == "CAPTCHA CHECK TOO FREQUENT":
                                 try:
@@ -524,8 +537,8 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 except Exception:
                                     pass
                                 attempt_notes.append(f"outer#{outer_i} inner#{inner_i} captcha too frequent; retrying")
-                                if ATTEMPT_DELAY_S > 0:
-                                    time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                                # Backoff: 2 * ATTEMPT_DELAY_S + jitter
+                                _sleep_backoff(2.0)
                                 continue
                             else:
                                 # Unknown message — record and continue inner retries

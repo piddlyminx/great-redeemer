@@ -72,7 +72,11 @@ class User(Base):
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     alliance: Mapped[Optional[Alliance]] = relationship("Alliance", back_populates="users")
-    redemptions: Mapped[list[Redemption]] = relationship("Redemption", back_populates="user")  # type: ignore[name-defined]
+    # Use passive_deletes so the DB's ON DELETE CASCADE handles child rows without
+    # SQLAlchemy trying to null the FK (which is NOT NULL).
+    redemptions: Mapped[list[Redemption]] = relationship(
+        "Redemption", back_populates="user", passive_deletes=True
+    )  # type: ignore[name-defined]
 
     __table_args__ = (
         Index("ix_users_fid", "fid"),
@@ -114,7 +118,9 @@ class GiftCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
-    redemptions: Mapped[list[Redemption]] = relationship("Redemption", back_populates="gift_code")  # type: ignore[name-defined]
+    redemptions: Mapped[list[Redemption]] = relationship(
+        "Redemption", back_populates="gift_code", passive_deletes=True
+    )  # type: ignore[name-defined]
 
     __table_args__ = (
         Index("ix_gift_codes_active", "active"),
@@ -139,7 +145,12 @@ class Redemption(Base):
 
     user: Mapped[User] = relationship("User", back_populates="redemptions")  # type: ignore[name-defined]
     gift_code: Mapped[GiftCode] = relationship("GiftCode", back_populates="redemptions")  # type: ignore[name-defined]
-    attempts: Mapped[list[RedemptionAttempt]] = relationship("RedemptionAttempt", back_populates="redemption", cascade="all, delete-orphan")  # type: ignore[name-defined]
+    attempts: Mapped[list[RedemptionAttempt]] = relationship(
+        "RedemptionAttempt",
+        back_populates="redemption",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )  # type: ignore[name-defined]
 
     __table_args__ = (
         UniqueConstraint("user_id", "gift_code_id", name="uq_user_code"),

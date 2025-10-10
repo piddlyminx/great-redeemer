@@ -41,6 +41,7 @@ pip-wheel-metadata/
 .history/
 .crush/
 .ipynb_checkpoints/
+temp.jpg
 
 # AI/assistant tooling artifacts
 .claude/

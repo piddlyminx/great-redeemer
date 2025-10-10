@@ -68,10 +68,9 @@ def main() -> int:
     for i, path in enumerate(files, 1):
         try:
             data_url = file_to_data_url(path)
-            guess, conf = solve_captcha_via_openrouter(data_url, api_key, return_confidence=True)  # type: ignore[assignment]
+            guess = solve_captcha_via_openrouter(data_url, api_key, max_attempts=1)  # type: ignore[assignment]
             ok += 1
-            conf_s = f" {conf:.2f}" if isinstance(conf, float) else ""
-            print(f"[{i}/{len(files)}] OK   {path.name:60s} -> {guess}{conf_s}")
+            print(f"[{i}/{len(files)}] OK   {path.name:60s} -> {guess}")
         except CaptchaSolverError as e:
             fail += 1
             g = e.guess or "-"
