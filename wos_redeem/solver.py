@@ -42,6 +42,22 @@ if not _LOGGER.handlers:
     _LOGGER.addHandler(logging.StreamHandler())
 
 
+def _safe_text(val, limit: int | None = None) -> str:
+    """Return a JSON-serializable text string.
+
+    - Decodes bytes using UTF-8 with replacement.
+    - Converts None to empty string.
+    - Optionally truncates to `limit` characters.
+    """
+    try:
+        if isinstance(val, bytes):
+            s = val.decode("utf-8", errors="replace")
+        else:
+            s = str(val or "")
+    except Exception:
+        s = ""
+    return s[:limit] if (limit is not None and limit >= 0) else s
+
 def _extract_captcha_from_content(content: str) -> Tuple[Optional[str], str]:
     """Return (captcha, cleaned_content) from a model content string.
 
@@ -156,7 +172,12 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
         img_path = _write_temp_image(data_url)
         c_guess, c_raw = _solve_via_codex_exec(img_path)
         last_c_raw = c_raw
-        _LOGGER.info(json.dumps({"event": "captcha_guess", "model": "codex/exec", "guess": c_guess, "content": (c_raw or "")[:200]}))
+        _LOGGER.info(json.dumps({
+            "event": "captcha_guess",
+            "model": "codex/exec",
+            "guess": _safe_text(c_guess, 20),
+            "content": _safe_text(c_raw, 200),
+        }))
         if c_guess and CAPTCHA_REGEX.fullmatch(c_guess):
             return c_guess
 
@@ -165,7 +186,12 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
             time.sleep(THROTTLE_BETWEEN_CALLS_S)
         q_guess, q_raw = _call_openrouter(api_key, VISION_MODEL_PRIMARY, vision_messages, max_attempts=max_attempts)
         last_q_raw = q_raw
-        _LOGGER.info(json.dumps({"event": "captcha_guess", "model": VISION_MODEL_PRIMARY, "guess": q_guess, "content": (q_raw or "")[:200]}))
+        _LOGGER.info(json.dumps({
+            "event": "captcha_guess",
+            "model": VISION_MODEL_PRIMARY,
+            "guess": _safe_text(q_guess, 20),
+            "content": _safe_text(q_raw, 200),
+        }))
         if q_guess and CAPTCHA_REGEX.fullmatch(q_guess):
             return q_guess
 
@@ -174,7 +200,10 @@ def solve_captcha_via_openrouter(data_url: str, api_key: str, max_attempts: int 
     raise CaptchaSolverError(
         "no valid captcha from selected solvers",
         guess=combined,
-        content=json.dumps({"codex_raw": last_c_raw, "qwen_raw": last_q_raw})[:500],
+        content=json.dumps({
+            "codex_raw": _safe_text(last_c_raw, 250),
+            "qwen_raw": _safe_text(last_q_raw, 250),
+        })[:500],
     )
 
 
@@ -238,14 +267,12 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
             timeout=15,
         )
         if res.returncode != 0:
-            _LOGGER.info(
-                json.dumps({
-                    "event": "codex_exec_error",
-                    "returncode": res.returncode,
-                    "stderr": (res.stderr or "").strip()[:400],
-                    "stdout": (res.stdout or "").strip()[:200],
-                })
-            )
+            _LOGGER.info(json.dumps({
+                "event": "codex_exec_error",
+                "returncode": res.returncode,
+                "stderr": _safe_text((res.stderr or "").strip(), 400),
+                "stdout": _safe_text((res.stdout or "").strip(), 200),
+            }))
             # surface some content for upstream logs
             combined = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
             return None, combined[:500]
@@ -263,14 +290,12 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
         if not raw:
             raw = (res.stdout or "").strip()
     except subprocess.TimeoutExpired as e:
-        _LOGGER.info(
-            json.dumps({
-                "event": "codex_exec_timeout",
-                "timeout_s": 15,
-                "stderr": (getattr(e, "stderr", "") or "")[:200],
-                "stdout": (getattr(e, "output", "") or "")[:200],
-            })
-        )
+        _LOGGER.info(json.dumps({
+            "event": "codex_exec_timeout",
+            "timeout_s": 15,
+            "stderr": _safe_text(getattr(e, "stderr", ""), 200),
+            "stdout": _safe_text(getattr(e, "output", ""), 200),
+        }))
         return None, None
     except Exception as e:
         _LOGGER.info(f"[solver] codex exec failed: {e}")
