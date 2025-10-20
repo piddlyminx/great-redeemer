@@ -246,7 +246,7 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
 
     Returns (guess, raw_text). Guess is None on failure.
     """
-    prompt = f"Read the 4 alphanumeric characters (case sensitive) in {image_path}"
+    prompt = f"Read the 4 alphanumeric characters (case sensitive) in {image_path}. Return only the 4 characters, no extra text, no quotes, no spaces."
     raw: Optional[str] = None
     try:
         import tempfile, os
