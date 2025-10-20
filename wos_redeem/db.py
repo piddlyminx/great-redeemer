@@ -38,6 +38,15 @@ class RedemptionStatus(enum.Enum):
     redeemed_already = "redeemed_already"  # User had already redeemed (RECEIVED/SAME TYPE EXCHANGE)
     failed = "failed"
 
+    @classmethod
+    def final_statuses(cls) -> set[str]:
+        """Statuses that represent a terminal outcome for a redemption."""
+        return {cls.redeemed_new.value, cls.redeemed_already.value, cls.failed.value}
+
+    @classmethod
+    def is_final(cls, status: str) -> bool:
+        return status in cls.final_statuses()
+
 
 class Alliance(Base):
     __tablename__ = "alliances"

@@ -338,7 +338,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                     if not user or not code or not user.active or not code.active:
                         continue
                     redemption = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-                    if redemption and redemption.status in (RedemptionStatus.redeemed_new.value, RedemptionStatus.redeemed_already.value):
+                    if redemption and redemption.status in RedemptionStatus.final_statuses():
                         continue
                     if not redemption:
                         # Handle race condition: another worker may have created this redemption
@@ -398,7 +398,6 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                     attempt_notes: list[str] = []
                     last_err_code: Optional[int] = None
                     last_captcha: Optional[str] = None
-                    final_outcome: str = "pending"  # one of: pending, success_new, success_already, failed
                     stop_this_cycle = False
 
                     for outer_i in range(1, REDEEM_OUTER_RETRIES + 1):
@@ -412,8 +411,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                             note = f"outer#{outer_i} /player error: {e}"
                             attempt_notes.append(note)
                             print(f"[worker] {note}", flush=True)
-                            if ATTEMPT_DELAY_S > 0:
-                                time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                            _sleep_backoff(1.0)
                             continue
 
                         # Inner loop: retry CAPTCHA inline up to REDEEM_INNER_RETRIES
@@ -431,8 +429,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 note = f"outer#{outer_i} inner#{inner_i} /captcha error: {e}"
                                 attempt_notes.append(note)
                                 print(f"[worker] {note}", flush=True)
-                                if ATTEMPT_DELAY_S > 0:
-                                    time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                                _sleep_backoff(1.0)
                                 continue
 
                             # Solve via OpenRouter
@@ -454,16 +451,14 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 except Exception:
                                     pass
                                 attempt_notes.append(f"outer#{outer_i} inner#{inner_i} solver error: {e}")
-                                if ATTEMPT_DELAY_S > 0:
-                                    time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                                _sleep_backoff(1.0)
                                 continue
                             except Exception as e:
                                 # Non-parsing errors (e.g., HTTP) — do not save image per requirements
                                 note = f"outer#{outer_i} inner#{inner_i} solver http/unknown error: {e}"
                                 print(f"[worker] {note}", flush=True)
                                 attempt_notes.append(note)
-                                if ATTEMPT_DELAY_S > 0:
-                                    time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                                _sleep_backoff(1.0)
                                 continue
 
                             # Redeem with captcha
@@ -480,14 +475,12 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 redemption.status = RedemptionStatus.redeemed_new.value
                                 redemption.captcha = last_captcha
                                 redemption.result_msg = str(msg)
-                                final_outcome = "success_new"
                                 successes += 1
                                 break  # exit inner
                             elif msg_norm in {"RECEIVED", "SAME TYPE EXCHANGE", "ALREADY RECEIVED"}:
                                 redemption.status = RedemptionStatus.redeemed_already.value
                                 redemption.captcha = last_captcha
                                 redemption.result_msg = str(msg)
-                                final_outcome = "success_already"
                                 successes += 1
                                 break  # exit inner
                             elif msg_norm in {"CDK NOT FOUND", "USED", "TIME ERROR"}:
@@ -504,10 +497,17 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                     redemption.status = RedemptionStatus.failed.value
                                 redemption.captcha = last_captcha
                                 redemption.result_msg = str(msg)
-                                final_outcome = "failed"
                                 errors += 1
                                 stop_this_cycle = True
                                 break  # exit inner
+                            elif "RECHARGE" in msg_norm and "VIP" in msg_norm:
+                                # User doesn't meet required VIP level for this code — fail this pair (do not deactivate code)
+                                redemption.status = RedemptionStatus.failed.value
+                                redemption.captcha = last_captcha
+                                redemption.result_msg = str(msg)
+                                errors += 1
+                                print(f"[worker] fid={user.fid} code={code.code} failed due to VIP level requirement: {msg_norm}", flush=True)
+                                break  # exit inner; no further retries for this attempt
                             elif msg_norm in {"NOT LOGIN", "TIMEOUT RETRY"}:
                                 note = f"outer#{outer_i} inner#{inner_i} backend={msg_norm} -> retry outer"
                                 print(f"[worker] {note}", flush=True)
@@ -544,19 +544,18 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 # Unknown message — record and continue inner retries
                                 attempt_notes.append(f"outer#{outer_i} inner#{inner_i} unknown msg={msg_norm}")
                                 errors += 1
-                                if ATTEMPT_DELAY_S > 0:
-                                    time.sleep(max(0.0, min(ATTEMPT_DELAY_S, 1.0) + random.uniform(0, 0.3)))
+                                _sleep_backoff(1.0)
                                 continue
 
                         # End inner loop: if we exited due to success/failed, break outer as well
-                        if final_outcome in ("success_new", "success_already", "failed"):
+                        if RedemptionStatus.is_final(redemption.status):
                             break
                         # Otherwise, continue next outer iteration
 
                     # End outer loop: persist exactly one RedemptionAttempt for this cycle
                     try:
                         result_payload = {
-                            "outcome": final_outcome,
+                            "outcome": redemption.status,
                             "notes": attempt_notes[-20:],
                         }
                         att = RedemptionAttempt(
