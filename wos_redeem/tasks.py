@@ -577,14 +577,13 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         print(f"[worker] fid={user.fid} DB error persisting single-attempt result: {db_err}", flush=True)
                         errors += 1
 
-                    # Inter-item delay and process only one task per loop iteration
+                    # Inter-item delay before attempting the next queue item
                     if ATTEMPT_DELAY_S > 0:
                         delay = max(0.0, ATTEMPT_DELAY_S + random.uniform(-0.5, 0.5))
                         time.sleep(delay)
                     # Signal cycle stop if we deactivated code
                     if stop_this_cycle:
                         stop_cycle = True
-                    break
         except Exception:
             LOGGER.exception("unexpected_exception_in_main_loop")
         
