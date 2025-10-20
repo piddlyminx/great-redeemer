@@ -22,6 +22,8 @@ THROTTLE_ON_429_S = float(os.getenv("OPENROUTER_429_SLEEP_S", "5"))
 CAPTCHA_REGEX = re.compile(r"^[A-Za-z0-9]{4}$")
 # Solver selection: "codex", "openrouter", or "auto" (default: auto)
 CAPTCHA_SOLVER = os.getenv("CAPTCHA_SOLVER", "auto").strip().lower()
+# Codex exec timeout (seconds)
+CODEX_EXEC_TIMEOUT_S = int(os.getenv("CODEX_EXEC_TIMEOUT_S", "60"))
 
 
 class CaptchaSolverError(Exception):
@@ -264,7 +266,7 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=15,
+            timeout=CODEX_EXEC_TIMEOUT_S,
         )
         if res.returncode != 0:
             _LOGGER.info(json.dumps({
@@ -292,7 +294,7 @@ def _solve_via_codex_exec(image_path: str) -> Tuple[Optional[str], Optional[str]
     except subprocess.TimeoutExpired as e:
         _LOGGER.info(json.dumps({
             "event": "codex_exec_timeout",
-            "timeout_s": 15,
+            "timeout_s": CODEX_EXEC_TIMEOUT_S,
             "stderr": _safe_text(getattr(e, "stderr", ""), 200),
             "stdout": _safe_text(getattr(e, "output", ""), 200),
         }))
