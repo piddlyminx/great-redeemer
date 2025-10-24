@@ -165,6 +165,8 @@ def eligible_count(db: Session) -> int:
     Uses a cross-count with NOT EXISTS filters to avoid Python-side cartesian loops.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.now(timezone.utc)
+    # Treat any terminal outcome as ineligible.
+    final_like = list(RedemptionStatus.final_statuses())
     stmt = (
         select(func.count())
         .select_from(User, GiftCode)
@@ -172,11 +174,7 @@ def eligible_count(db: Session) -> int:
         .where(~exists(select(Redemption.id).where(
             Redemption.user_id == User.id,
             Redemption.gift_code_id == GiftCode.id,
-            Redemption.status.in_([
-                RedemptionStatus.redeemed_new.value,
-                RedemptionStatus.redeemed_already.value,
-                'success'
-            ]),
+            Redemption.status.in_(final_like),
         )))
         .where(~exists(select(Redemption.id).where(
             Redemption.user_id == User.id,
@@ -230,8 +228,8 @@ def _eligible_pairs(db: Session, limit_codes: int = 20, limit_users: int = 200) 
                 )
             )
 
-            # Skip if already successfully redeemed (including legacy 'success' status)
-            if redemption and redemption.status in ('redeemed_new', 'redeemed_already', 'success'):
+            # Skip if redemption is in a final state
+            if redemption and RedemptionStatus.is_final(redemption.status):
                 continue
 
             # Skip if attempt count exceeded
@@ -338,7 +336,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                     if not user or not code or not user.active or not code.active:
                         continue
                     redemption = db.scalar(select(Redemption).where(Redemption.user_id == user.id, Redemption.gift_code_id == code.id))
-                    if redemption and redemption.status in RedemptionStatus.final_statuses():
+                    if redemption and RedemptionStatus.is_final(redemption.status):
                         continue
                     if not redemption:
                         # Handle race condition: another worker may have created this redemption
