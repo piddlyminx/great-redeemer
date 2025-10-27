@@ -76,9 +76,10 @@ def _extract_captcha_from_content(content: str) -> Tuple[Optional[str], str]:
         if isinstance(obj, dict) and "captcha" in obj:
             captcha = str(obj["captcha"]).strip()
     except json.JSONDecodeError:
-        m = re.search(CAPTCHA_REGEX, content_clean)
-        if m:
-            captcha = m.group(0)
+        # Look for any 4-char alphanumeric substrings and pick the last occurrence
+        matches = re.findall(r"[A-Za-z0-9]{4}", content_clean)
+        if matches:
+            captcha = matches[-1]
     return (captcha if (captcha and CAPTCHA_REGEX.fullmatch(captcha)) else None, content_clean)
 
 

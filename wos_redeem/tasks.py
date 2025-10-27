@@ -17,8 +17,8 @@ from sqlalchemy.exc import IntegrityError
 
 from .db import SessionLocal, GiftCode, User, Redemption, RedemptionAttempt, RedemptionStatus
 from . import api
-from .solver import solve_captcha_via_openrouter, CaptchaSolverError
-from .utils import save_failure_captcha
+from .captcha_solver import GiftCaptchaSolver
+from .utils import save_failure_captcha, _data_url_to_bytes
 from .queueing import worker_state, QueueItem
 
 
@@ -286,15 +286,18 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
         max_attempts_per_pair = MAX_ATTEMPTS_PER_PAIR
     if poll_seconds is None:
         poll_seconds = REDEEM_POLL_SECONDS
-    api_key = None
+    # Initialize ONNX solver once per worker
+    try:
+        onnx_solver = GiftCaptchaSolver()
+    except Exception:
+        onnx_solver = None  # type: ignore[assignment]
     while True:
         attempts_made = 0
         successes = 0
         errors = 0
         try:
-            api_key = api_key or (os.getenv(openrouter_api_key_env) or None)  # type: ignore[name-defined]
-            if not api_key:
-                # Still emit heartbeats/status so UI shows liveness without API key
+            # If ONNX solver is not ready, idle but keep heartbeats so UI shows liveness
+            if not onnx_solver or not getattr(onnx_solver, "is_initialized", False):
                 try:
                     with SessionLocal() as db_ec:
                         ec = eligible_count(db_ec)
@@ -306,7 +309,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         "successes": successes,
                         "errors": errors,
                         "sleep": poll_seconds,
-                        "note": "no_openrouter_api_key",
+                        "note": "onnx_solver_unavailable",
                         "current": None,
                         "eligible": ec,
                     }
@@ -314,7 +317,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                         f.write(json.dumps(status))
                 except Exception:
                     pass
-                print(f"[worker] OpenRouter API key missing; sleeping {poll_seconds}s", flush=True)
+                print(f"[worker] ONNX solver unavailable; sleeping {poll_seconds}s", flush=True)
                 time.sleep(poll_seconds)
                 continue
             with SessionLocal() as db:
@@ -430,32 +433,34 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                                 _sleep_backoff(1.0)
                                 continue
 
-                            # Solve via OpenRouter
+                            # Solve via local ONNX model
                             try:
-                                captcha = solve_captcha_via_openrouter(data_url, api_key)
+                                img_bytes, _ext = _data_url_to_bytes(data_url)
+                                guess, ok, method, conf, _ = onnx_solver.solve_captcha(
+                                    img_bytes, fid=user.fid, attempt=(inner_i - 1)
+                                )
+                                if not ok or not guess:
+                                    raise RuntimeError("onnx_solver_no_guess")
+                                captcha = str(guess)
                                 last_captcha = captcha
-                                print(f"[worker] fid={user.fid} openrouter captcha={captcha}", flush=True)
-                            except CaptchaSolverError as e:
-                                print(f"[worker] fid={user.fid} openrouter error: {e}", flush=True)
-                                # Persist the CAPTCHA image with the exact attempted guess
+                                print(
+                                    f"[worker] fid={user.fid} onnx captcha={captcha} conf={conf:.3f}",
+                                    flush=True,
+                                )
+                            except Exception as e:
+                                # Persist the CAPTCHA image with the best-known guess when solver fails
+                                print(f"[worker] fid={user.fid} onnx solver error: {e}", flush=True)
                                 try:
                                     out_path = save_failure_captcha(
                                         data_url,
                                         fid=user.fid,
-                                        guess=(e.guess or "none"),
-                                        reason="openrouter_error",
+                                        guess="none",
+                                        reason="onnx_error",
                                     )
                                     print(f"[worker] saved failed captcha to: {out_path}", flush=True)
                                 except Exception:
                                     pass
-                                attempt_notes.append(f"outer#{outer_i} inner#{inner_i} solver error: {e}")
-                                _sleep_backoff(1.0)
-                                continue
-                            except Exception as e:
-                                # Non-parsing errors (e.g., HTTP) — do not save image per requirements
-                                note = f"outer#{outer_i} inner#{inner_i} solver http/unknown error: {e}"
-                                print(f"[worker] {note}", flush=True)
-                                attempt_notes.append(note)
+                                attempt_notes.append(f"outer#{outer_i} inner#{inner_i} onnx solver error: {e}")
                                 _sleep_backoff(1.0)
                                 continue
 

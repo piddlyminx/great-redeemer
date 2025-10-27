@@ -16,6 +16,12 @@ dependencies = [
   "python-multipart>=0.0.9",
   "alembic>=1.13",
   "PyJWT[crypto]>=2.9",
+  # ONNX CAPTCHA solver
+  "onnxruntime>=1.18",
+  "numpy>=1.26",
+  "Pillow>=10.0",
+  # PDF export for failure report
+  "reportlab>=4.0",
 ]
 
 [build-system]
@@ -24,3 +30,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["wos_redeem"]
+
+[tool.uv]
+# Include pytest so `uv run pytest` works in project env
+dev-dependencies = [
+  "pytest>=8.2",
+]

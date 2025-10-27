@@ -301,10 +301,13 @@ def api_create_alliance(name: str = Form(...), tag: str = Form(...), quota: int 
         # simple check: placeholder for future auth
         _require(True)
     # Validate and preserve user-provided case for the 3-letter alliance tag
+    name_val = (name or "").strip()
+    if not name_val:
+        raise HTTPException(status_code=400, detail="name is required")
     tag_val = (tag or "").strip()
     if not re.fullmatch(r"[A-Za-z]{3}", tag_val):
         raise HTTPException(status_code=400, detail="tag must be exactly 3 letters")
-    a = Alliance(name=name.strip(), tag=tag_val, quota=max(0, int(quota)))
+    a = Alliance(name=name_val, tag=tag_val, quota=max(0, int(quota)))
     db.add(a)
     db.commit()
     return {"ok": True, "id": a.id}
@@ -324,7 +327,10 @@ def api_update_alliance(
     if not a:
         raise HTTPException(404)
     if name is not None:
-        a.name = name.strip()
+        nval = (name or "").strip()
+        if not nval:
+            raise HTTPException(status_code=400, detail="name must be non-empty")
+        a.name = nval
     if tag is not None:
         tval = tag.strip()
         if not re.fullmatch(r"[A-Za-z]{3}", tval):
