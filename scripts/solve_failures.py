@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import os
 import sys
 from pathlib import Path
 from typing import Iterable
 
-from wos_redeem.solver import solve_captcha_via_openrouter, CaptchaSolverError
+from wos_redeem.captcha_solver import GiftCaptchaSolver, ONNX_AVAILABLE
 
 
 MIME_BY_EXT = {
@@ -20,14 +18,6 @@ MIME_BY_EXT = {
 }
 
 
-def file_to_data_url(path: Path) -> str:
-    ext = path.suffix.lower()
-    mime = MIME_BY_EXT.get(ext, "image/jpeg")
-    data = path.read_bytes()
-    b64 = base64.b64encode(data).decode("ascii")
-    return f"data:{mime};base64,{b64}"
-
-
 def iter_images(root: Path) -> Iterable[Path]:
     for p in sorted(root.glob("*")):
         if p.is_file() and p.suffix.lower() in MIME_BY_EXT:
@@ -35,15 +25,19 @@ def iter_images(root: Path) -> Iterable[Path]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Attempt solving CAPTCHA images in ./failures via OpenRouter")
+    ap = argparse.ArgumentParser(description="Attempt solving CAPTCHA images in ./failures via local ONNX solver")
     ap.add_argument("--dir", default="failures", help="Directory containing saved CAPTCHA images (default: failures)")
     ap.add_argument("--limit", type=int, default=0, help="Max images to attempt (0 = all)")
     ap.add_argument("--shuffle", action="store_true", help="Shuffle order before attempting")
     args = ap.parse_args()
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        print("OPENROUTER_API_KEY not set; export it and re-run", file=sys.stderr)
+    if not ONNX_AVAILABLE:
+        print("ONNX runtime not available; install dependencies to run the local solver.", file=sys.stderr)
+        return 2
+
+    solver = GiftCaptchaSolver()
+    if not solver.is_initialized:
+        print("ONNX solver failed to initialize; ensure captcha_model.onnx and metadata are present.", file=sys.stderr)
         return 2
 
     root = Path(args.dir)
@@ -67,14 +61,14 @@ def main() -> int:
     fail = 0
     for i, path in enumerate(files, 1):
         try:
-            data_url = file_to_data_url(path)
-            guess = solve_captcha_via_openrouter(data_url, api_key, max_attempts=1)  # type: ignore[assignment]
-            ok += 1
-            print(f"[{i}/{len(files)}] OK   {path.name:60s} -> {guess}")
-        except CaptchaSolverError as e:
-            fail += 1
-            g = e.guess or "-"
-            print(f"[{i}/{len(files)}] FAIL {path.name:60s} -> {g}  ({e})")
+            img_bytes = path.read_bytes()
+            guess, solved, _method, conf, _ = solver.solve_captcha(img_bytes, fid=None, attempt=0)
+            if solved and guess:
+                ok += 1
+                print(f"[{i}/{len(files)}] OK   {path.name:60s} -> {guess} (conf={conf:.3f})")
+            else:
+                fail += 1
+                print(f"[{i}/{len(files)}] FAIL {path.name:60s} -> {guess or '-'}")
         except Exception as e:
             fail += 1
             print(f"[{i}/{len(files)}] ERR  {path.name:60s} -> {e}")

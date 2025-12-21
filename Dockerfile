@@ -24,22 +24,6 @@ WORKDIR /app
 COPY --from=base /app /app
 COPY --from=ui /ui/dist /app/static/ui
 
-# Bring a Node.js runtime into the final image (for Codex CLI)
-FROM node:20-bookworm-slim AS nodebin
-
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS final-with-node
-WORKDIR /app
-COPY --from=base /app /app
-COPY --from=ui /ui/dist /app/static/ui
-# Copy Node runtime + global modules and bin shims
-COPY --from=nodebin /usr/local /usr/local
-# Install Codex CLI globally (provides /usr/local/bin/codex)
-RUN npm i -g @openai/codex && \
-    codex --version
-## Bake a minimal Codex config that trusts /app inside the container
-RUN mkdir -p /root/.codex
-COPY codex/config.toml /root/.codex/config.toml
-
 # Expose port used by uvicorn
 EXPOSE 8000
 

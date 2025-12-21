@@ -11,7 +11,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 
-from sqlalchemy import select, func, exists, and_, or_
+from sqlalchemy import select, func, exists, and_, or_, literal
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -167,23 +167,25 @@ def eligible_count(db: Session) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.now(timezone.utc)
     # Treat any terminal outcome as ineligible.
     final_like = list(RedemptionStatus.final_statuses())
+    u = User.__table__.alias("u_ec")
+    c = GiftCode.__table__.alias("c_ec")
     stmt = (
         select(func.count())
-        .select_from(User, GiftCode)
-        .where(User.active == True, GiftCode.active == True)
+        .select_from(u.join(c, literal(True)))
+        .where(u.c.active == True, c.c.active == True)
         .where(~exists(select(Redemption.id).where(
-            Redemption.user_id == User.id,
-            Redemption.gift_code_id == GiftCode.id,
+            Redemption.user_id == u.c.id,
+            Redemption.gift_code_id == c.c.id,
             Redemption.status.in_(final_like),
         )))
         .where(~exists(select(Redemption.id).where(
-            Redemption.user_id == User.id,
-            Redemption.gift_code_id == GiftCode.id,
+            Redemption.user_id == u.c.id,
+            Redemption.gift_code_id == c.c.id,
             Redemption.attempt_count >= MAX_ATTEMPTS_PER_PAIR,
         )))
         .where(~exists(select(Redemption.id).where(
-            Redemption.user_id == User.id,
-            Redemption.gift_code_id == GiftCode.id,
+            Redemption.user_id == u.c.id,
+            Redemption.gift_code_id == c.c.id,
             Redemption.last_attempt_at.is_not(None),
             Redemption.last_attempt_at > cutoff,
         )))
@@ -191,66 +193,71 @@ def eligible_count(db: Session) -> int:
     return int(db.scalar(stmt) or 0)
 
 
-def _eligible_pairs(db: Session, limit_codes: int = 20, limit_users: int = 200) -> List[QueueItem]:
+def _eligible_pairs(db: Session, limit_pairs: int = 4000) -> List[QueueItem]:
     """Return eligible (user, code) pairs ready to process now.
 
     Applies: active flags, success filter, retry backoff window, and max attempts per pair.
-    Ordered by code first_seen_at asc, then user id asc.
+    Ordered by code first_seen_at asc, then user id asc. The result set is limited
+    at the pair level (`limit_pairs`).
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=MIN_RETRY_MINUTES) if MIN_RETRY_MINUTES else datetime.now(timezone.utc)
-
-    # Get active codes ordered by first_seen_at
-    codes = db.scalars(
-        select(GiftCode)
-        .where(GiftCode.active == True)
-        .order_by(GiftCode.first_seen_at.asc())
-        .limit(max(1, limit_codes))
-    ).all()
-
-    # Get active users ordered by id
-    users = db.scalars(
-        select(User)
-        .where(User.active == True)
-        .order_by(User.id.asc())
-        .limit(max(1, limit_users))
-    ).all()
-
-    out: List[QueueItem] = []
-
-    for code in codes:
-        for user in users:
-            # Check if redemption exists
-            redemption = db.scalar(
-                select(Redemption)
-                .where(
-                    Redemption.user_id == user.id,
-                    Redemption.gift_code_id == code.id
+    final_like = list(RedemptionStatus.final_statuses())
+    u = User.__table__.alias("u")
+    c = GiftCode.__table__.alias("c")
+    r = Redemption.__table__.alias("r")
+    stmt = (
+        select(
+            u.c.id.label("user_id"),
+            u.c.fid,
+            u.c.name,
+            c.c.id.label("gift_code_id"),
+            c.c.code,
+        )
+        .select_from(u.join(c, literal(True)))
+        .where(u.c.active == True, c.c.active == True)
+        .where(
+            ~exists(
+                select(r.c.id).where(
+                    r.c.user_id == u.c.id,
+                    r.c.gift_code_id == c.c.id,
+                    r.c.status.in_(final_like),
                 )
             )
+        )
+        .where(
+            ~exists(
+                select(r.c.id).where(
+                    r.c.user_id == u.c.id,
+                    r.c.gift_code_id == c.c.id,
+                    r.c.attempt_count >= MAX_ATTEMPTS_PER_PAIR,
+                )
+            )
+        )
+        .where(
+            ~exists(
+                select(r.c.id).where(
+                    r.c.user_id == u.c.id,
+                    r.c.gift_code_id == c.c.id,
+                    r.c.last_attempt_at.is_not(None),
+                    r.c.last_attempt_at > cutoff,
+                )
+            )
+        )
+        .order_by(c.c.first_seen_at.asc(), u.c.id.asc())
+        .limit(max(1, limit_pairs))
+    )
 
-            # Skip if redemption is in a final state
-            if redemption and RedemptionStatus.is_final(redemption.status):
-                continue
-
-            # Skip if attempt count exceeded
-            if redemption and redemption.attempt_count >= MAX_ATTEMPTS_PER_PAIR:
-                continue
-
-            # Skip if within backoff window
-            if redemption and redemption.last_attempt_at:
-                last = _as_utc(redemption.last_attempt_at)
-                if last and last > cutoff:
-                    continue
-
-            out.append(QueueItem(
-                user_id=user.id,
-                fid=user.fid,
-                name=user.name,
-                gift_code_id=code.id,
-                code=code.code
-            ))
-
-    return out
+    rows = db.execute(stmt).all()
+    return [
+        QueueItem(
+            user_id=row.user_id,
+            fid=row.fid,
+            name=row.name,
+            gift_code_id=row.gift_code_id,
+            code=row.code,
+        )
+        for row in rows
+    ]
 
 
 def _refill_queue(db: Session) -> int:

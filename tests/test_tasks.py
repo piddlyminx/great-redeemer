@@ -35,8 +35,39 @@ def test_eligible_pairs_respects_success(db_sessionmaker):
         s.add(Redemption(user_id=u1.id, gift_code_id=code.id, status=RedemptionStatus.redeemed_new.value))
         s.commit()
 
-        pairs = _eligible_pairs(s, limit_codes=5, limit_users=5)
+        pairs = _eligible_pairs(s, limit_pairs=25)
         keys = {(p.fid, p.code) for p in pairs}
         assert (1, "HELLO") not in keys
         assert (2, "HELLO") in keys
 
+
+def test_eligible_pairs_pages_past_first_200_users(db_sessionmaker):
+    from sqlalchemy import select
+    from wos_redeem.tasks import _eligible_pairs
+    from wos_redeem.db import SessionLocal, User, GiftCode, Redemption, RedemptionStatus
+
+    with SessionLocal() as s:
+        code = GiftCode(code="CODEX", active=True)
+        s.add(code)
+        # 250 active users
+        users = [User(fid=i, active=True) for i in range(1, 251)]
+        s.add_all(users)
+        s.commit()
+        # Mark first 200 users as already redeemed (final status)
+        for u in users[:200]:
+            s.add(
+                Redemption(
+                    user_id=u.id,
+                    gift_code_id=code.id,
+                    status=RedemptionStatus.redeemed_new.value,
+                )
+            )
+        s.commit()
+
+        pairs = _eligible_pairs(s, limit_pairs=1000)
+        fids = {p.fid for p in pairs}
+
+        assert 1 not in fids  # first batch is final and excluded
+        assert 200 not in fids
+        assert 201 in fids  # users beyond the first 200 are surfaced
+        assert 250 in fids

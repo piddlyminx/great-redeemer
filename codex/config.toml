@@ -1,6 +1,0 @@
-projects = { "/app" = { trust_level = "trusted" } }
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-# Keep other options default; runtime mounts can still override auth.json.
-

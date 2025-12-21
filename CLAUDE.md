@@ -10,7 +10,7 @@ WOS Code Redeemer is a multi-component application for automatically redeeming g
 - **Background workers**: RSS scraper (finds new codes) + redemption worker (attempts codes with AI captcha solving)
 - **Database**: PostgreSQL (production) or SQLite (dev) with Alembic migrations
 
-**Note**: [redeem.py](redeem.py) is a proof-of-concept CLI script, not used in the application. The actual redemption logic is in [worker.py](wos_redeem/worker.py), [tasks.py](wos_redeem/tasks.py), [api.py](wos_redeem/api.py), and [solver.py](wos_redeem/solver.py).
+**Note**: [redeem.py](redeem.py) is a proof-of-concept CLI script, not used in the application. The actual redemption logic is in [worker.py](wos_redeem/worker.py), [tasks.py](wos_redeem/tasks.py), [api.py](wos_redeem/api.py), and the ONNX solver in [captcha_solver.py](wos_redeem/captcha_solver.py).
 
 ## Development Setup
 
@@ -50,7 +50,7 @@ uv run pytest tests/test_api.py  # single file
 - [app.py](wos_redeem/app.py): FastAPI application with JSON API routes and SPA serving
 - [api.py](wos_redeem/api.py): Low-level WOS API client functions (call_player, call_captcha, call_gift_code)
 - [tasks.py](wos_redeem/tasks.py): Background worker loops (RSS scraper, redemption worker with throttling/backoff)
-- [solver.py](wos_redeem/solver.py): OpenRouter vision API integration for CAPTCHA solving
+- [captcha_solver.py](wos_redeem/captcha_solver.py): Local ONNX CAPTCHA solver
 - [auth.py](wos_redeem/auth.py): Password hashing and bootstrap admin utilities
 - [cf_access.py](wos_redeem/cf_access.py): Cloudflare Access JWT verification
 - [worker.py](wos_redeem/worker.py): Entry point to run workers standalone

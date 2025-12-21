@@ -19,7 +19,7 @@ services:
   app:
     build:
       context: .
-      target: final-with-node
+      target: final
     container_name: wos_app
     depends_on:
       db:
@@ -71,7 +71,7 @@ services:
   worker:
     build:
       context: .
-      target: final-with-node
+      target: final
     container_name: wos_worker
     depends_on:
       db:
@@ -92,10 +92,6 @@ services:
       - state:/state
       - ./logs:/logs
       - ./failures:/app/failures
-      # Mount only Codex auth; config.toml is baked in the image
-      - ${HOME}/.codex/auth.json:/root/.codex/auth.json:ro
-      # Optional: if you want to use host codex binary instead of baked one, uncomment:
-      # - /usr/local/bin/codex:/usr/local/bin/codex:ro
 
 volumes:
   pgdata:
