@@ -551,6 +551,7 @@ def api_codes(db: Session = Depends(get_db)):
                 "id": c.id,
                 "code": c.code,
                 "active": c.active,
+                "source_created_at": c.source_created_at.isoformat() if c.source_created_at else None,
                 "first_seen_at": c.first_seen_at.isoformat() if c.first_seen_at else None,
                 "expires_at": c.expires_at.isoformat() if c.expires_at else None,
                 "redeemed": redeemed,
@@ -563,7 +564,16 @@ def api_codes(db: Session = Depends(get_db)):
 
 @app.get("/api/codes/{code}/detail")
 def api_code_detail(code: str, db: Session = Depends(get_db)):
-    gc = db.scalar(select(GiftCode).where(GiftCode.code == code))
+    gc = db.scalar(
+        select(GiftCode)
+        .where(GiftCode.code == code)
+        .order_by(
+            GiftCode.active.desc(),
+            GiftCode.source_created_at.desc(),
+            GiftCode.first_seen_at.desc(),
+            GiftCode.id.desc(),
+        )
+    )
     if not gc:
         raise HTTPException(404)
 
@@ -665,6 +675,7 @@ def api_code_detail(code: str, db: Session = Depends(get_db)):
         "id": gc.id,
         "code": gc.code,
         "active": gc.active,
+        "source_created_at": gc.source_created_at.isoformat() if gc.source_created_at else None,
         "first_seen_at": gc.first_seen_at.isoformat() if gc.first_seen_at else None,
         "expires_at": gc.expires_at.isoformat() if gc.expires_at else None,
         "summary": {"redeemed": redeemed, "failed": failed, "pending": pending},

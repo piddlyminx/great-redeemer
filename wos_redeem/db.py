@@ -117,10 +117,11 @@ class GiftCode(Base):
     __tablename__ = "gift_codes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text)
     source_url: Mapped[Optional[str]] = mapped_column(String(500))
+    source_created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -132,6 +133,7 @@ class GiftCode(Base):
     )  # type: ignore[name-defined]
 
     __table_args__ = (
+        UniqueConstraint("code", "source_created_at", name="uq_gift_codes_code_created"),
         Index("ix_gift_codes_active", "active"),
     )
 
