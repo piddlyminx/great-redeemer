@@ -17,7 +17,7 @@ from sqlalchemy import select, func, exists, literal, update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from .db import SessionLocal, GiftCode, User, Redemption, RedemptionAttempt, RedemptionStatus
+from .db import SessionLocal, GiftCode, User, Redemption, RedemptionAttempt, RedemptionStatus, Alliance
 from . import api
 from .captcha_solver import GiftCaptchaSolver
 from .utils import save_failure_captcha, _data_url_to_bytes
@@ -690,6 +690,9 @@ def _eligible_pairs(
     u = User.__table__.alias("u")
     c = GiftCode.__table__.alias("c")
     r = Redemption.__table__.alias("r")
+    a = Alliance.__table__.alias("a")
+    # Prioritize ARK alliance users (is_ark=0 sorts before is_ark=1)
+    is_ark = func.coalesce(a.c.tag == "ARK", False)
     stmt = (
         select(
             u.c.id.label("user_id"),
@@ -698,7 +701,9 @@ def _eligible_pairs(
             c.c.id.label("gift_code_id"),
             c.c.code,
         )
-        .select_from(u.join(c, literal(True)))
+        .select_from(
+            u.outerjoin(a, u.c.alliance_id == a.c.id).join(c, literal(True))
+        )
         .where(u.c.active == True, c.c.active == True)
         .where(
             ~exists(
@@ -728,7 +733,7 @@ def _eligible_pairs(
                 )
             )
         )
-        .order_by(c.c.first_seen_at.asc(), u.c.id.asc())
+        .order_by(is_ark.desc(), c.c.first_seen_at.asc(), u.c.id.asc())
         .limit(max(1, limit_pairs))
     )
 

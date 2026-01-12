@@ -262,6 +262,33 @@ def test_eligible_pairs_scan_beyond_first_batch(db_sessionmaker):
         assert "NEWCODE" in codes_in_queue
 
 
+def test_eligible_pairs_prioritizes_ark_alliance(db_sessionmaker):
+    from wos_redeem.tasks import _eligible_pairs
+    from wos_redeem.db import SessionLocal, User, GiftCode, Alliance
+
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    with SessionLocal() as s:
+        ark_alliance = Alliance(name="ARK Alliance", tag="ARK")
+        other_alliance = Alliance(name="Other Alliance", tag="OTH")
+        s.add_all([ark_alliance, other_alliance])
+        s.commit()
+
+        user_no_alliance = User(fid=1, active=True)
+        user_other = User(fid=2, active=True, alliance_id=other_alliance.id)
+        user_ark = User(fid=3, active=True, alliance_id=ark_alliance.id)
+        s.add_all([user_no_alliance, user_other, user_ark])
+
+        code = GiftCode(code="TESTCODE", active=True, source_created_at=base)
+        s.add(code)
+        s.commit()
+
+        pairs = _eligible_pairs(s, limit_pairs=10)
+        fids = [p.fid for p in pairs]
+
+        assert fids[0] == 3  # ARK user should be first
+        assert set(fids) == {1, 2, 3}
+
+
 def test_pending_with_max_attempts_marked_failed(db_sessionmaker):
     from sqlalchemy import select
     from wos_redeem.tasks import _eligible_pairs, MAX_ATTEMPTS_PER_PAIR
