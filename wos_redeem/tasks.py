@@ -566,6 +566,19 @@ def _reconcile_gift_codes(
         if _validate(code_value, created_at) != VALIDATION_VALID:
             continue
 
+        # Expire any existing active codes with the same value but different date
+        old_codes = db.scalars(
+            select(GiftCode).where(
+                GiftCode.code == code_value,
+                GiftCode.source_created_at != created_at,
+                GiftCode.active == True,
+            )
+        ).all()
+        for old_code in old_codes:
+            old_code.active = False
+            old_code.expires_at = now
+            changed = True
+
         db.add(
             GiftCode(
                 code=code_value,
@@ -948,6 +961,7 @@ def redemption_worker_loop(openrouter_api_key_env: str = "OPENROUTER_API_KEY", m
                             f"[worker] fid={user.fid} code={code.code} failed due to VIP level requirement: {result.msg_norm}",
                             flush=True,
                         )
+
 
                     # End outer loop: persist exactly one RedemptionAttempt for this cycle
                     try:
