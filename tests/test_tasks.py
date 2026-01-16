@@ -209,6 +209,40 @@ def test_reconcile_expires_old_active_code_when_new_date_added(db_sessionmaker):
         assert _as_utc(new_code.source_created_at) == new_at
 
 
+def test_reconcile_expires_old_codes_when_existing_date_seen(db_sessionmaker):
+    from sqlalchemy import select
+    from wos_redeem.tasks import _reconcile_gift_codes, _as_utc
+    from wos_redeem.db import SessionLocal, GiftCode
+
+    old_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    current_at = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    now = datetime(2025, 1, 3, tzinfo=timezone.utc)
+    with SessionLocal() as s:
+        old_code = GiftCode(code="HELLO", active=True, source_created_at=old_at)
+        current_code = GiftCode(code="HELLO", active=True, source_created_at=current_at)
+        s.add_all([old_code, current_code])
+        s.commit()
+        old_id = old_code.id
+        current_id = current_code.id
+
+        # API returns the current date - old codes should be expired
+        _reconcile_gift_codes(
+            s,
+            [("HELLO", current_at)],
+            now=now,
+            validator=lambda *_: "valid",
+        )
+        codes = s.scalars(select(GiftCode).where(GiftCode.code == "HELLO")).all()
+        assert len(codes) == 2
+
+        old = next(c for c in codes if c.id == old_id)
+        current = next(c for c in codes if c.id == current_id)
+
+        assert old.active is False
+        assert _as_utc(old.expires_at) == now
+        assert current.active is True
+
+
 def test_reconcile_expires_codes_from_api_flag(db_sessionmaker):
     from wos_redeem.tasks import _reconcile_gift_codes
     from wos_redeem.db import SessionLocal, GiftCode

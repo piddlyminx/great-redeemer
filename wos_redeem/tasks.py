@@ -561,12 +561,19 @@ def _reconcile_gift_codes(
                 existing.active = True
                 existing.expires_at = None
                 changed = True
+        elif _validate(code_value, created_at) == VALIDATION_VALID:
+            db.add(
+                GiftCode(
+                    code=code_value,
+                    source_created_at=created_at,
+                    source_url=CODE_SOURCE_URL,
+                )
+            )
+            changed = True
+        else:
             continue
 
-        if _validate(code_value, created_at) != VALIDATION_VALID:
-            continue
-
-        # Expire any existing active codes with the same value but different date
+        # Expire any other active codes with same value but different date
         old_codes = db.scalars(
             select(GiftCode).where(
                 GiftCode.code == code_value,
@@ -578,15 +585,6 @@ def _reconcile_gift_codes(
             old_code.active = False
             old_code.expires_at = now
             changed = True
-
-        db.add(
-            GiftCode(
-                code=code_value,
-                source_created_at=created_at,
-                source_url=CODE_SOURCE_URL,
-            )
-        )
-        changed = True
 
     if changed:
         db.commit()
