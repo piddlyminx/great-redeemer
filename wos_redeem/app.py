@@ -249,7 +249,7 @@ def api_summary(db: Session = Depends(get_db)):
                 return f.read().strip()
         except Exception:
             return None
-    rss_hb = read_file(".rss_heartbeat")
+    codes_hb = read_file(".codes_heartbeat")
     worker_hb = read_file(".worker_heartbeat")
     try:
         import json
@@ -265,7 +265,7 @@ def api_summary(db: Session = Depends(get_db)):
         "success": success,
         "failed": failed,
         "pending": pending,
-        "rss_hb": rss_hb,
+        "codes_hb": codes_hb,
         "worker_hb": worker_hb,
         "worker_status": worker_status,
     }
@@ -914,7 +914,7 @@ async def api_worker_events(request: Request):
                                     return f.read().strip()
                             except Exception:
                                 return None
-                        rss_hb = _read(".rss_heartbeat")
+                        codes_hb = _read(".codes_heartbeat")
                         worker_hb = _read(".worker_heartbeat")
 
                         payload["summary"] = {
@@ -923,7 +923,7 @@ async def api_worker_events(request: Request):
                             "success": success,
                             "failed": failed,
                             "pending": pending,
-                            "rss_hb": rss_hb,
+                            "codes_hb": codes_hb,
                             "worker_hb": worker_hb,
                             "worker_status": cached_status,
                         }

@@ -16,7 +16,7 @@ export default function Monitor() {
       <div className="card bg-base-100/90 ring-1 ring-white/10 shadow-xl"><div className="card-body">
         <div className="text-sm text-base-content/60">Heartbeats</div>
         <div className="grid grid-cols-2 gap-3 divide-x divide-white/5">
-          <div>RSS: <span className={summary?.rss_hb ? 'badge badge-success badge-outline' : 'badge badge-ghost'}>{summary?.rss_hb ? formatAgo(summary.rss_hb) : 'inactive'}</span></div>
+          <div>Codes: <span className={summary?.codes_hb ? 'badge badge-success badge-outline' : 'badge badge-ghost'}>{summary?.codes_hb ? formatAgo(summary.codes_hb) : 'inactive'}</span></div>
           <div>Worker: <span className={summary?.worker_hb ? 'badge badge-success badge-outline' : 'badge badge-ghost'}>{summary?.worker_hb ? formatAgo(summary.worker_hb) : 'inactive'}</span></div>
         </div>
       </div></div>
