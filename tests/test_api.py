@@ -52,9 +52,10 @@ def test_call_gift_code_with_captcha(monkeypatch):
 
     captured = {}
 
-    def fake_post(url, data=None, timeout=None):
+    def fake_post(url, data=None, headers=None, timeout=None):
         captured["url"] = url
         captured["data"] = dict(data)
+        captured["headers"] = dict(headers or {})
         return DummyResponse(captured["data"])
 
     monkeypatch.setattr("wos_redeem.api.requests.post", fake_post)
@@ -65,3 +66,6 @@ def test_call_gift_code_with_captcha(monkeypatch):
     sent = captured["data"]
     assert sent["captcha_code"] == "A1b2"
     assert isinstance(sent.get("sign"), str)
+    assert captured["headers"].get("Referer")
+    assert captured["headers"].get("Origin")
+    assert captured["headers"].get("User-Agent")

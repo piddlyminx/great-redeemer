@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import time
 from typing import Dict, Optional
 
@@ -11,6 +10,13 @@ import requests
 
 BASE = "https://wos-giftcode-api.centurygame.com/api"
 SECRET = os.getenv("WOS_SECRET", "tB87#kPtkxqOS2")
+API_REFERER = os.getenv("WOS_API_REFERER", "https://wos-giftcode.centurygame.com/")
+API_ORIGIN = os.getenv("WOS_API_ORIGIN", "https://wos-giftcode.centurygame.com")
+API_USER_AGENT = os.getenv(
+    "WOS_API_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+)
 
 
 def now_ms() -> int:
@@ -36,7 +42,13 @@ def sign_payload(payload: Dict) -> str:
 
 def post_form(path: str, fields: Dict, timeout: int = 60) -> Dict:
     url = BASE + path
-    resp = requests.post(url, data=fields, timeout=timeout)
+    headers = {
+        "Referer": API_REFERER,
+        "Origin": API_ORIGIN,
+        "User-Agent": API_USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+    }
+    resp = requests.post(url, data=fields, headers=headers, timeout=timeout)
     resp.raise_for_status()
     try:
         return resp.json()
